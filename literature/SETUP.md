@@ -1,44 +1,37 @@
 # Setting Up a Literature Review in a New Project
 
-Drop-in guide. Takes 5 minutes to set up, then agents handle the rest.
+Takes 2 minutes. Then agents handle the rest.
 
 ## Prerequisites
 
 - Python 3.12+
-- [uv](https://docs.astral.sh/uv/) package manager
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
-## 1. Copy the System Into Your Project
-
-```bash
-# From the mcduck repo (or wherever you have the literature system)
-cp -r literature/ /path/to/your-project/literature/
-
-# Clear the example papers — start fresh
-rm -rf literature/papers/*.md literature/resources/*.md
-rm -f literature/index/papers.db literature/index/graph.yaml literature/index/status.yaml
-rm -f literature/index/references.bib literature/index/embeddings.yaml
-rm -f literature/landscape.yaml literature/landscape.md
-rm -rf literature/output/*
-rm -f literature/themes/*.md
-```
-
-## 2. Install Dependencies
+## 1. Install
 
 ```bash
-cd /path/to/your-project
-
-# Core (needed for all features)
-uv add ruamel.yaml requests jinja2 pymupdf
-
-# Dev (for running tests)
-uv add --dev pytest responses
+pip install agent-litreview
+# or
+uv add agent-litreview
 ```
 
-No servers, no databases, no config files. Everything runs locally with stdlib `sqlite3`.
+## 2. Scaffold
+
+```bash
+cd your-project
+lit init
+```
+
+This creates a `literature/` directory with:
+- `PURPOSE.md` — your research goals (edit this first)
+- `AGENTS.md` — schema reference for AI agents
+- `papers/` — one markdown file per paper
+- `templates/` — LaTeX templates for review generation
+- Empty directories for themes, output, index
 
 ## 3. Define Your Research Purpose
 
-Edit `literature/PURPOSE.md` — this tells the system what you care about:
+Edit `literature/PURPOSE.md`:
 
 ```markdown
 # Research Purpose
@@ -46,97 +39,86 @@ Edit `literature/PURPOSE.md` — this tells the system what you care about:
 ## Research Questions
 
 1. How can we generate realistic limit order book simulations?
-2. What role do foundation models play in financial market microstructure?
+2. What role do foundation models play in market microstructure?
 
 ## Key Topics
 
 - limit order book simulation
 - market microstructure
 - generative models for financial time series
-- agent-based market simulation
 
 ## Methodology Focus
 
 - transformer architectures
 - diffusion models
-- reinforcement learning for trading
 
 ## Exclusions
 
 - high-frequency trading strategy alpha
-- sentiment analysis from social media
+- sentiment analysis
 ```
 
-This file drives the recommendation engine. Without it, recommendations still work (using PageRank + recency), but with it, papers relevant to your research questions rank higher.
+This drives the recommendation engine. Without it, recommendations use PageRank + recency only.
 
-## 4. Add Your First Papers
+## 4. Add Papers
 
 ```bash
-# From arXiv URL
-uv run python literature/scripts/lit.py add "https://arxiv.org/abs/1706.03762"
+# From arXiv
+lit add "https://arxiv.org/abs/1706.03762"
 
 # From DOI
-uv run python literature/scripts/enrich.py "10.1145/3442188.3445922"
-
-# From bare arXiv ID
-uv run python literature/scripts/enrich.py "2301.00001"
-
-# Non-paper resource (blog, talk, code)
-uv run python literature/scripts/enrich.py --type blog "https://example.com/post" --title "Great Blog Post"
+lit add "10.1145/3442188.3445922"
 ```
 
-Each paper gets a markdown file in `literature/papers/` with metadata fetched from Semantic Scholar (title, authors, year, abstract, TLDR, citation count).
+Each paper gets a markdown file in `literature/papers/` with metadata from Semantic Scholar.
 
 ## 5. Build the Index
 
 ```bash
-uv run python literature/scripts/lit.py rebuild
+lit rebuild
 ```
 
-This creates `literature/index/papers.db` — a SQLite database with BM25 full-text search, citation graph, and PageRank scores. Takes <1 second for typical collections. Rebuild after every change to paper files.
+Creates `literature/index/papers.db` — SQLite with BM25 search, citation graph, PageRank. Takes <1s. Run after every change.
 
 ## 6. Start Working
 
 ```bash
-# What should I read next?
-uv run python literature/scripts/lit.py recommend 5
-
-# Search for papers on a topic
-uv run python literature/scripts/lit.py search "transformer attention mechanism"
-
-# Ask a synthesis question across all papers
-uv run python literature/scripts/lit.py ask "What approaches exist for LOB simulation?" --depth 2
-
-# Find new papers to add
-uv run python literature/scripts/lit.py discover --source s2
-uv run python literature/scripts/lit.py inbox
+lit recommend 5                    # what to read next
+lit search "transformer attention" # BM25 search
+lit ask "What approaches exist for LOB simulation?" --depth 2  # cross-paper synthesis
+lit discover --source s2           # find new papers
+lit inbox                          # review candidates
 ```
+
+## Agent Integration
+
+```bash
+lit install-skill
+```
+
+Copies `SKILL.md` to `~/.agents/skills/literature-review/`. Agents (opencode, Claude Code) auto-detect it and know the full API.
 
 ## Daily Workflow
 
 ```
-Add paper   →  lit add "url"              →  paper file created (unread)
-Rebuild     →  lit rebuild                 →  SQLite index synced
-Recommend   →  lit recommend 5             →  what to read next
-Search      →  lit search "topic"          →  BM25 full-text search
-Read        →  edit the .md file           →  add notes, update reading_status
-Summarize   →  Python API (see below)      →  store L4/L2 with model provenance
-Rebuild     →  lit rebuild                 →  sync summaries into search index
-Ask         →  lit ask "question"          →  funnel retrieval for cross-paper synthesis
-Discover    →  lit discover --source s2    →  find new relevant papers
-Generate    →  lit generate --title "..."  →  NeurIPS LaTeX review
+Add       →  lit add "url"              →  paper created (unread)
+Rebuild   →  lit rebuild                →  SQLite synced
+Recommend →  lit recommend 5            →  what to read next
+Search    →  lit search "topic"         →  BM25 full-text search
+Read      →  edit the .md file          →  add notes, set reading_status
+Summarize →  Python API: set_summary()  →  store L4/L2 with provenance
+Rebuild   →  lit rebuild                →  sync summaries to index
+Ask       →  lit ask "question"         →  funnel retrieval
+Discover  →  lit discover --source s2   →  find new papers
+Generate  →  lit generate --title "..." →  NeurIPS LaTeX
 ```
 
-## How Agents Use This System
+## How Agents Read Papers
 
-The system is designed for coding agents (opencode, Claude Code, etc.). The agent loads the `literature-review` skill and knows the full API.
-
-### Reading a Paper (Agent Workflow)
-
-1. Agent runs `lit recommend 5` to pick the most important unread paper
-2. Agent reads the paper's abstract from frontmatter
-3. Agent optionally extracts PDF text: `uv run python literature/scripts/summarize.py <citekey>`
-4. Agent generates summaries and stores them with provenance:
+1. `lit recommend 5` — pick most important unread paper
+2. Read the abstract from frontmatter
+3. Optional: extract PDF text via `uv run python -m literature.scripts.summarize <citekey>`
+4. Generate summaries with provenance:
 
 ```python
 from literature.scripts.parse import read_frontmatter, write_paper_file, set_summary
@@ -144,141 +126,65 @@ from pathlib import Path
 
 meta, body = read_frontmatter(Path("literature/papers/vaswani2017attention.md"))
 
-# L4: one-sentence synthesis (20-30 words)
+# L4: one-sentence synthesis
 set_summary(meta, "l4",
-    "Transformer replaces recurrence entirely with self-attention for sequence transduction, achieving state-of-the-art BLEU with greater parallelism.",
-    "claude-opus-4-6")  # always record the model name
+    "Transformer replaces recurrence with self-attention for sequence transduction, achieving BLEU SOTA with greater parallelism.",
+    "claude-opus-4-6")
 
-# L2: key claims (3-5 bullet points)
+# L2: key claims
 set_summary(meta, "l2",
-    ["Self-attention captures long-range dependencies in O(1) sequential operations",
+    ["Self-attention captures long-range dependencies in O(1) operations",
      "Multi-head attention jointly attends to different representation subspaces",
-     "Achieves 28.4 BLEU on WMT 2014 EN-DE, surpassing all prior models"],
+     "Achieves 28.4 BLEU on WMT 2014 EN-DE"],
     "claude-opus-4-6")
 
 write_paper_file(Path("literature/papers/vaswani2017attention.md"), meta, body)
 ```
 
-5. Agent runs `lit rebuild` to sync summaries into the search index
-6. Agent updates `reading_status.global` to `"read"` in the markdown file
+5. `lit rebuild` to sync summaries into the search index
 
-### Answering Research Questions
+## Cross-Paper Synthesis
 
 ```bash
-# Agent runs funnel retrieval
-uv run python literature/scripts/lit.py ask "What are the tradeoffs between diffusion and autoregressive models for LOB generation?" --depth 2
+lit ask "What are the tradeoffs between diffusion and autoregressive models?" --depth 2
 ```
 
-The system returns the most relevant papers with their summaries. The agent synthesizes the answer from the retrieved context and cites papers by citekey.
-
-**Depth controls token budget:**
-- `--depth 1`: ~500 tokens (fast scan of titles + one-liners)
-- `--depth 2`: ~2.5K tokens (adds abstracts for top-10) — **recommended default**
+Depth controls token budget:
+- `--depth 1`: ~500 tokens (titles + one-liners)
+- `--depth 2`: ~2.5K tokens (adds abstracts for top-10) — default
 - `--depth 3`: ~3.5K tokens (adds key claims for top-3)
 - `--depth 4`: ~5K tokens (adds full notes for top-1)
-
-## Paper File Format
-
-Each paper is a markdown file with YAML frontmatter:
-
-```yaml
----
-doc_id: "vaswani2017attention"
-title: "Attention Is All You Need"
-authors: ["Vaswani, A.", "Shazeer, N."]
-year: 2017
-arxiv_id: "1706.03762"
-abstract: "The dominant sequence transduction models..."
-tldr: "A new architecture based entirely on attention mechanisms..."
-citation_count: 169004
-reading_status:
-  global: unread      # unread | skimmed | read | synthesized
-cites:
-  - id: bahdanau2014attention
-    type: extends     # cites | extends | contradicts | uses_method | uses_dataset | surveys
-tags: [transformers, attention]
-themes: [foundation-models]
-summaries:            # written by agents via set_summary()
-  l4:
-    text: "Transformer replaces recurrence with self-attention..."
-    model: "claude-opus-4-6"
-    generated_at: "2026-03-14T10:00:00Z"
----
-
-## Notes
-
-Your reading notes go here.
-```
-
-## Linking Papers
-
-After reading a paper, add relationships to its `cites` field:
-
-```yaml
-cites:
-  - id: vaswani2017attention
-    type: extends           # this paper extends the transformer
-  - id: devlin2019bert
-    type: uses_method       # this paper uses BERT's pretraining approach
-```
-
-Run `lit rebuild` to update the citation graph and PageRank scores.
-
-## Generating a LaTeX Review
-
-1. Create theme files in `literature/themes/` — each is a section of the review:
-
-```markdown
----
-title: "Foundation Models for Market Microstructure"
-order: 1
----
-
-TradeFM \cite{kawawa-beaudan2026tradefm} introduces a generative transformer
-for trade-flow data, building on universal price formation
-\cite{sirignano2018universal}.
-```
-
-2. Generate the review:
-```bash
-uv run python literature/scripts/lit.py generate --title "My Survey" --authors "Your Name"
-cd literature/output && pdflatex review.tex && bibtex review && pdflatex review.tex && pdflatex review.tex
-```
 
 ## Command Reference
 
 | Command | What it does |
 |---------|-------------|
-| `lit rebuild` | Sync markdown files → SQLite (run after any change) |
+| `lit init` | Scaffold `literature/` in any project |
+| `lit install-skill` | Install agent SKILL.md |
+| `lit rebuild` | Sync markdown → SQLite |
 | `lit search "query"` | BM25 full-text search |
 | `lit recommend N` | Top-N reading recommendations |
-| `lit ask "question" --depth 2` | Cross-paper synthesis via funnel retrieval |
+| `lit ask "question" --depth 2` | Cross-paper synthesis |
 | `lit paper <citekey>` | Show paper details |
 | `lit add "url"` | Add paper from arXiv/DOI |
-| `lit discover --source s2` | Find new papers via Semantic Scholar |
-| `lit discover --source arxiv` | Find new papers via arXiv RSS |
-| `lit inbox` | Review discovered paper candidates |
+| `lit discover --source s2` | Find papers via Semantic Scholar |
+| `lit discover --source arxiv` | Find papers via arXiv RSS |
+| `lit inbox` | Review discovered candidates |
 | `lit ingest --list` | Papers needing summarization |
 | `lit ingest --status` | Summarization progress |
 | `lit generate --title "..."` | Generate LaTeX review |
-| `lit migrate --from-v1` | Migrate from v1 YAML system |
 | `lit stats` | Collection overview |
-| `lit status` | Reading queue status |
 
-All commands support `--json` for machine-readable output (add before the subcommand: `lit --json search "query"`).
+All commands support `--json` for machine-readable output.
 
-`lit` is shorthand for `uv run python literature/scripts/lit.py`.
+## Architecture
 
-## Architecture (for the curious)
+- **Source of truth**: Markdown files in `literature/papers/`
+- **Index**: SQLite + FTS5 (derived, rebuildable)
+- **Search**: BM25 via FTS5 (no vector DB)
+- **Ranking**: PageRank on citation graph
+- **Recommendations**: 4-signal scoring
+- **Synthesis**: Multi-stage funnel retrieval (~5K tokens for 10K papers)
+- **Summarization**: Agent-driven with model+timestamp provenance
 
-- **Source of truth**: One markdown file per paper in `literature/papers/`
-- **Index**: SQLite + FTS5 at `literature/index/papers.db` — derived, rebuildable
-- **Search**: BM25 via SQLite FTS5 (no vector database, no embeddings required)
-- **Ranking**: PageRank on citation graph via scipy sparse matrices
-- **Recommendations**: 4-signal scoring (project relevance + co-citation + recency + PageRank)
-- **Synthesis**: Multi-stage funnel retrieval (~5K tokens to query 10K papers)
-- **Summarization**: Agent-driven with model+timestamp provenance tracking
-- **Discovery**: Semantic Scholar Recommendations API + arXiv RSS feeds
-- **LaTeX**: Jinja2 templates with NeurIPS style
-
-No external services required at runtime. No GPU. No vector database. Scales to 10K+ papers.
+No external services at runtime. No GPU. Scales to 10K+ papers.

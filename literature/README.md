@@ -1,42 +1,42 @@
 # Literature Review System — User Manual
 
-A portable, git-native literature review manager. Drop `literature/` into any repo and start collecting papers.
+Agent-native literature review manager. Install via `pip install agent-litreview`, then `lit init` in any project.
 
-**v3**: Primary interface is `lit` (`literature/scripts/lit.py`). SQLite-backed with BM25 search, PageRank recommendations, and cross-paper synthesis.
+**v3**: Primary interface is the `lit` CLI. SQLite-backed with BM25 search, PageRank recommendations, and cross-paper synthesis.
 
 ## Setup
 
 ```bash
-# Copy literature/ into your project
-cp -r literature/ /path/to/your-project/literature/
+# Install the package
+pip install agent-litreview   # or: uv add agent-litreview
 
-# Install dependencies
-uv add ruamel.yaml requests jinja2 bm25s
-uv add --dev pytest responses
+# Scaffold literature/ in your project
+cd your-project
+lit init
 
-# Clear existing data (keep scripts/templates/tests)
-rm -rf literature/papers/*.md literature/index/* literature/output/* literature/themes/*.md
+# Install agent skill (optional — for opencode/Claude Code)
+lit install-skill
 ```
 
 No server, no config. Scripts auto-detect the `literature/` root.
 
-## Quick Start (v3)
+## Quick Start
 
 ```bash
 # 1. Add a paper (fetches metadata from Semantic Scholar)
-uv run python literature/scripts/lit.py add "https://arxiv.org/abs/1706.03762"
+lit add "https://arxiv.org/abs/1706.03762"
 
 # 2. Build the SQLite index
-uv run python literature/scripts/lit.py rebuild
+lit rebuild
 
 # 3. See what to read next
-uv run python literature/scripts/lit.py recommend 5
+lit recommend 5
 
 # 4. Search for papers
-uv run python literature/scripts/lit.py search "attention mechanism"
+lit search "attention mechanism"
 
 # 5. Ask a synthesis question
-uv run python literature/scripts/lit.py ask "What are the key contributions of transformer models?" --depth 2
+lit ask "What are the key contributions of transformer models?" --depth 2
 ```
 
 ## Daily Workflow (v3)
