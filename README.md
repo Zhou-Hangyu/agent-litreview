@@ -1,6 +1,6 @@
 # (-o-) alit
 
-Your AI agent reads papers so you don't have to.
+Your AI agent reads papers with your taste so you don't have to.
 
 `pip install agent-lit` → zero dependencies, SQLite-only, works with any coding agent.
 
