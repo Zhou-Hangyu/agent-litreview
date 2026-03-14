@@ -7,6 +7,7 @@ Zero dependencies. Pure Python stdlib only.
 import re
 import sqlite3
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -414,7 +415,44 @@ def enrich_papers(conn: sqlite3.Connection, db_path: Path, *, fetch_pdfs: bool =
         except Exception as e:
             errors.append(f"{arxiv_id} ({paper_id}): {e}")
 
-    return {"enriched": enriched, "total": len(papers), "errors": errors}
+    no_arxiv = conn.execute(
+        "SELECT id, title FROM papers WHERE (arxiv_id = '' OR arxiv_id IS NULL) AND (abstract = '' OR abstract IS NULL) AND title != ''"
+    ).fetchall()
+
+    for row in no_arxiv:
+        try:
+            import json as _json
+            encoded = urllib.parse.quote(row["title"])
+            s2_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={encoded}&limit=1&fields=title,abstract,year,authors,externalIds,url"
+            data = _json.loads(_fetch_url(s2_url).decode("utf-8"))
+            results = data.get("data", [])
+            if not results:
+                continue
+            top = results[0]
+            t1 = set(row["title"].lower().split())
+            t2 = set((top.get("title") or "").lower().split())
+            overlap = len(t1 & t2) / max(len(t1 | t2), 1)
+            if overlap < 0.6:
+                continue
+            meta: dict = {"abstract": top.get("abstract") or "", "url": top.get("url") or ""}
+            if top.get("year"):
+                meta["year"] = top["year"]
+            authors = ", ".join(a.get("name", "") for a in (top.get("authors") or []))
+            if authors:
+                meta["authors"] = authors
+            ext = top.get("externalIds") or {}
+            if ext.get("ArXiv"):
+                meta["arxiv_id"] = ext["ArXiv"]
+            if ext.get("DOI"):
+                meta["doi"] = ext["DOI"]
+            update_paper(conn, row["id"], **meta)
+            enriched += 1
+            print(f"  [{enriched}] {row['id']} (via title search)", flush=True)
+            time.sleep(1)
+        except Exception:
+            continue
+
+    return {"enriched": enriched, "total": len(papers) + len(no_arxiv), "errors": errors}
 
 
 def _arxiv_pdf_url(arxiv_id: str) -> str:
@@ -564,6 +602,16 @@ def _sanitize_id(raw: str) -> str:
 def add_paper(conn: sqlite3.Connection, id: str, title: str, **kwargs) -> dict:
     """Insert a paper, or update fields if it already exists. Never loses existing data."""
     id = _sanitize_id(id)
+
+    arxiv_id = kwargs.get("arxiv_id", "")
+    if arxiv_id:
+        existing_row = conn.execute("SELECT id FROM papers WHERE arxiv_id = ?", (arxiv_id,)).fetchone()
+        if existing_row:
+            updates = {k: v for k, v in kwargs.items() if v is not None and k in _VALID_PAPER_FIELDS}
+            if title:
+                updates["title"] = title
+            return update_paper(conn, existing_row["id"], **updates)
+
     existing = get_paper(conn, id)
     if existing:
         updates = {k: v for k, v in kwargs.items() if v is not None and k in _VALID_PAPER_FIELDS}

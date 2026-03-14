@@ -631,3 +631,193 @@ def test_export_json_format(tmp_path):
     assert code == 0
     data = json.loads(output.getvalue())
     assert len(data["papers"]) == 1
+
+
+def test_dedup_by_arxiv_id(db):
+    p1 = add_paper(db, "paper_one", "Attention Is All You Need", arxiv_id="1706.03762", year=2017)
+    assert p1["id"] == "paper_one"
+
+    p2 = add_paper(db, "paper_two_different_id", "Attention Is All You Need v2", arxiv_id="1706.03762", year=2018)
+    assert p2["id"] == "paper_one"
+    assert p2["year"] == 2018
+
+    all_papers = list_papers(db)
+    assert len(all_papers) == 1
+    assert all_papers[0]["id"] == "paper_one"
+
+
+def test_import_json(tmp_path):
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    conn.close()
+
+    json_file = tmp_path / "papers.json"
+    json_file.write_text(json.dumps([
+        {"title": "Paper One", "arxiv_id": "1706.03762", "year": 2017, "tags": "transformers,attention"},
+        {"title": "Paper Two", "year": 2024, "authors": "Smith, Jones"},
+    ]))
+
+    import io
+    from unittest.mock import patch
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["import", str(json_file)], root=tmp_path)
+    assert code == 0
+    assert "Imported 2" in output.getvalue()
+
+    conn = init_db(tmp_path)
+    papers = list_papers(conn)
+    assert len(papers) == 2
+    ids = [p["id"] for p in papers]
+    p1 = next(p for p in papers if p.get("arxiv_id") == "1706.03762")
+    assert p1["year"] == 2017
+    assert p1["tags"] == "transformers,attention"
+    conn.close()
+
+
+def test_import_json_skips_existing(tmp_path):
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "paper_one", "Paper One", arxiv_id="1706.03762")
+    conn.close()
+
+    json_file = tmp_path / "papers.json"
+    json_file.write_text(json.dumps([
+        {"title": "Paper One Again", "arxiv_id": "1706.03762"},
+        {"title": "Paper Two"},
+    ]))
+
+    import io
+    from unittest.mock import patch
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["import", str(json_file)], root=tmp_path)
+    assert code == 0
+    text = output.getvalue()
+    assert "Imported 1" in text
+    assert "skipped 1" in text
+
+
+def test_summarize_variadic_l2(tmp_path):
+    import io
+    from unittest.mock import patch
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Test Paper")
+    conn.close()
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["summarize", "p1", "--l2", "claim1", "claim2", "claim3"], root=tmp_path)
+    assert code == 0
+    assert "l2" in output.getvalue()
+
+    conn = init_db(tmp_path)
+    paper = get_paper(conn, "p1")
+    assert paper is not None
+    claims = json.loads(paper["summary_l2"])
+    assert claims == ["claim1", "claim2", "claim3"]
+    conn.close()
+
+
+def test_summarize_l2_backward_compat_json(tmp_path):
+    import io
+    from unittest.mock import patch
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Test Paper")
+    conn.close()
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["summarize", "p1", "--l2", '["old_claim1", "old_claim2"]'], root=tmp_path)
+    assert code == 0
+
+    conn = init_db(tmp_path)
+    paper = get_paper(conn, "p1")
+    assert paper is not None
+    claims = json.loads(paper["summary_l2"])
+    assert claims == ["old_claim1", "old_claim2"]
+    conn.close()
+
+
+def test_dedup_command(tmp_path):
+    import io
+    from unittest.mock import patch
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Attention Paper", arxiv_id="1706.03762", year=2017)
+    add_paper(conn, "p2_dup", "Attention Paper Duplicate", arxiv_id="1706.03762", year=2017)
+    conn.close()
+
+    conn = init_db(tmp_path)
+    conn.execute("INSERT INTO papers (id, title, arxiv_id) VALUES ('p2_force', 'Attention Dup', '1706.03762')")
+    conn.commit()
+    conn.close()
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["dedup"], root=tmp_path)
+    assert code == 0
+    text = output.getvalue()
+    assert "duplicate" in text.lower() or "arxiv:1706.03762" in text
+
+
+def test_dedup_merge(tmp_path):
+    import io
+    from unittest.mock import patch
+    from alit.scripts.lit import run, _cmd_dedup
+    import argparse
+
+    conn = init_db(tmp_path)
+    conn.execute("INSERT INTO papers (id, title, arxiv_id, abstract) VALUES ('p1', 'Paper One', '1706.03762', 'Has abstract')")
+    conn.execute("INSERT INTO papers (id, title, arxiv_id, abstract) VALUES ('p2', 'Paper Two Dup', '1706.03762', '')")
+    conn.commit()
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        args = argparse.Namespace(merge=True)
+        code = _cmd_dedup(args, conn)
+    assert code == 0
+    text = output.getvalue()
+    assert "Merged" in text
+
+    papers = list_papers(conn)
+    assert len(papers) == 1
+    conn.close()
+
+
+def test_cite_batch(tmp_path):
+    import io
+    from unittest.mock import patch
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Paper One")
+    add_paper(conn, "p2", "Paper Two")
+    add_paper(conn, "p3", "Paper Three")
+    conn.close()
+
+    batch_file = tmp_path / "edges.json"
+    batch_file.write_text(json.dumps([
+        {"from": "p1", "to": "p2", "type": "cites"},
+        {"from": "p1", "to": "p3", "type": "extends"},
+    ]))
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["cite", "--batch", str(batch_file)], root=tmp_path)
+    assert code == 0
+    assert "Added 2" in output.getvalue()
+
+    conn = init_db(tmp_path)
+    cites = conn.execute("SELECT COUNT(*) FROM citations").fetchone()[0]
+    assert cites == 2
+    conn.close()

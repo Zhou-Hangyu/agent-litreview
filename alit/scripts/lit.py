@@ -132,7 +132,9 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
         if "url" not in kwargs:
             kwargs["url"] = f"https://arxiv.org/abs/{arxiv}"
 
-    if arxiv and not kwargs.get("abstract"):
+    do_enrich = getattr(args, "enrich", False)
+
+    if do_enrich and arxiv and not kwargs.get("abstract"):
         from alit.scripts.db import _enrich_one_arxiv, _enrich_one_s2
         enriched = _enrich_one_arxiv(arxiv) or _enrich_one_s2(arxiv)
         if enriched:
@@ -160,7 +162,7 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
             paper = get_paper(conn, paper_id)
         else:
             print(f"Warning: PDF not found at {src}", file=sys.stderr)
-    elif not no_pdf:
+    elif do_enrich and not no_pdf:
         pdf = fetch_pdf_for_paper(conn, paper_id, db_path)
         if pdf:
             paper = get_paper(conn, paper_id)
@@ -168,8 +170,11 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
     if getattr(args, "json", False):
         print(json.dumps(paper, ensure_ascii=False))
     else:
-        pdf_msg = f" | pdf: {paper.get('pdf_path')}" if paper and paper.get("pdf_path") else ""
-        print(f"(-o+) Added: {paper_id}{pdf_msg}")
+        if do_enrich:
+            pdf_msg = f" | pdf: {paper.get('pdf_path')}" if paper and paper.get("pdf_path") else ""
+            print(f"(-o+) Added: {paper_id}{pdf_msg}")
+        else:
+            print(f"(-o+) Added: {paper_id} (run alit enrich to fetch metadata)")
     return 0
 
 
@@ -305,7 +310,7 @@ def _cmd_summarize(args: argparse.Namespace, conn) -> int:
 
     model = getattr(args, "model", "") or ""
     l4 = getattr(args, "l4", None)
-    l2 = getattr(args, "l2", None)
+    l2_raw = getattr(args, "l2", None)
 
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -315,8 +320,16 @@ def _cmd_summarize(args: argparse.Namespace, conn) -> int:
         kwargs["summary_l4"] = l4
         kwargs["summary_l4_model"] = model
         kwargs["summary_l4_at"] = now
-    if l2 is not None:
-        kwargs["summary_l2"] = l2
+    if l2_raw is not None:
+        import json as _json
+        claims = l2_raw
+        if len(claims) == 1 and claims[0].startswith("["):
+            try:
+                claims = _json.loads(claims[0])
+            except Exception:
+                pass
+        l2_content = _json.dumps(claims)
+        kwargs["summary_l2"] = l2_content
         kwargs["summary_l2_model"] = model
         kwargs["summary_l2_at"] = now
 
@@ -333,7 +346,23 @@ def _cmd_summarize(args: argparse.Namespace, conn) -> int:
     return 0
 
 
+
 def _cmd_cite(args: argparse.Namespace, conn) -> int:
+    batch_file = getattr(args, "batch", None)
+    if batch_file:
+        import json as _json
+        data = _json.loads(Path(batch_file).read_text())
+        added = 0
+        for edge in data:
+            from_id = edge.get("from") or edge.get("from_id", "")
+            to_id = edge.get("to") or edge.get("to_id", "")
+            type_ = edge.get("type", "cites")
+            if from_id and to_id:
+                add_citation(conn, from_id, to_id, type_)
+                added += 1
+        print(f"(-o+) Added {added} citation edges")
+        return 0
+
     from_id = args.from_id
     to_id = args.to_id
     type_ = getattr(args, "type", "cites") or "cites"
@@ -705,6 +734,30 @@ def _cmd_import(args: argparse.Namespace, conn) -> int:
     if is_bib:
         return _import_bibtex(args, conn, file_path)
 
+    is_json = getattr(args, "json_import", False) or file_path.suffix == ".json"
+    if is_json:
+        import json as _json
+        from alit.scripts.db import _VALID_PAPER_FIELDS, get_paper as _get_paper
+        data = _json.loads(file_path.read_text())
+        if not isinstance(data, list):
+            print("JSON must be a list of paper objects", file=sys.stderr)
+            return 1
+        added, skipped = 0, 0
+        for entry in data:
+            entry_title = entry.get("title", "Untitled")
+            paper_id = entry.get("id") or _auto_id(entry_title, conn)
+            entry_kwargs = {k: v for k, v in entry.items() if k in _VALID_PAPER_FIELDS and k not in ("id", "title") and v}
+            entry_arxiv = entry_kwargs.get("arxiv_id", "")
+            already_by_id = _get_paper(conn, paper_id)
+            already_by_arxiv = entry_arxiv and conn.execute("SELECT 1 FROM papers WHERE arxiv_id=?", (entry_arxiv,)).fetchone()
+            if already_by_id or already_by_arxiv:
+                skipped += 1
+                continue
+            add_paper(conn, paper_id, entry_title, **entry_kwargs)
+            added += 1
+        print(f"(-o+) Imported {added} from JSON, skipped {skipped} existing", flush=True)
+        return 0
+
     from alit.scripts.db import _enrich_batch_arxiv, _enrich_one_s2
 
     db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
@@ -832,6 +885,21 @@ def _cmd_find(args: argparse.Namespace, conn) -> int:
                 first_author = r["authors"].split(",")[0].strip() if r["authors"] else ""
                 print(f"  {i:2d}. [{r['year'] or '????'}] {r['title'][:60]} ({first_author}) arxiv:{r['arxiv_id']}{marker}")
             print(f"\nTo add: alit add \"https://arxiv.org/abs/<id>\"")
+
+        if getattr(args, "add", False) and results:
+            added = 0
+            for r in results:
+                if r.get("in_db"):
+                    continue
+                arxiv_id = r.get("arxiv_id", "")
+                if not arxiv_id:
+                    continue
+                paper_id = f"arxiv_{arxiv_id.replace('.', '_')}"
+                add_paper(conn, paper_id, r["title"], arxiv_id=arxiv_id, year=r.get("year"),
+                          authors=r.get("authors", ""), abstract=r.get("abstract", ""),
+                          url=r.get("url", ""))
+                added += 1
+            print(f"\n(-o+) Added {added} papers to collection")
     else:
         from alit.scripts.db import _fetch_url
         encoded = _quote(query)
@@ -951,6 +1019,60 @@ def _cmd_progress(args: argparse.Namespace, conn) -> int:
     return 0
 
 
+def _cmd_dedup(args: argparse.Namespace, conn) -> int:
+    from alit.scripts.db import _VALID_PAPER_FIELDS
+
+    dupes = conn.execute("""
+        SELECT arxiv_id, GROUP_CONCAT(id) as ids, COUNT(*) as cnt
+        FROM papers WHERE arxiv_id != '' AND arxiv_id IS NOT NULL
+        GROUP BY arxiv_id HAVING cnt > 1
+    """).fetchall()
+
+    if not dupes:
+        print("(-o-) No duplicates found")
+        return 0
+
+    print(f"Found {len(dupes)} duplicate groups:\n")
+    for d in dupes:
+        ids = d["ids"].split(",")
+        print(f"  arxiv:{d['arxiv_id']}:")
+        for pid in ids:
+            paper = get_paper(conn, pid)
+            if paper:
+                has_summary = "✓" if paper.get("summary_l4") else " "
+                has_pdf = "📄" if paper.get("pdf_path") else "  "
+                print(f"    {has_pdf}{has_summary} {pid}: {(paper.get('title') or '')[:50]}")
+
+    if getattr(args, "merge", False):
+        merged = 0
+        for d in dupes:
+            ids = d["ids"].split(",")
+            papers = [get_paper(conn, pid) for pid in ids]
+            papers = [p for p in papers if p]
+            if len(papers) < 2:
+                continue
+
+            def richness(p: dict) -> int:
+                return sum(1 for field in ("abstract", "summary_l4", "summary_l2", "notes", "pdf_path", "authors") if p.get(field))
+
+            papers.sort(key=richness, reverse=True)
+            keeper = papers[0]
+
+            for other in papers[1:]:
+                for field in _VALID_PAPER_FIELDS:
+                    if not keeper.get(field) and other.get(field):
+                        update_paper(conn, keeper["id"], **{field: other[field]})
+                conn.execute("UPDATE OR IGNORE citations SET from_id = ? WHERE from_id = ?", (keeper["id"], other["id"]))
+                conn.execute("UPDATE OR IGNORE citations SET to_id = ? WHERE to_id = ?", (keeper["id"], other["id"]))
+                delete_paper(conn, other["id"])
+                merged += 1
+
+        print(f"\n(-o+) Merged {merged} duplicates")
+    else:
+        print(f"\nRun alit dedup --merge to auto-merge (keeps richest record)")
+    return 0
+
+
 def _cmd_install_skill(args: argparse.Namespace) -> int:
     import shutil
 
@@ -1047,6 +1169,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tags", default=None)
     p.add_argument("--pdf", default=None, help="Path to local PDF file")
     p.add_argument("--no-pdf", action="store_true", help="Skip PDF download")
+    p.add_argument("--enrich", action="store_true", help="Fetch metadata + PDF immediately (default: just store URL)")
 
     # show
     p = sub.add_parser("show", help="Show paper details")
@@ -1072,15 +1195,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("summarize", help="Store a summary with provenance")
     p.add_argument("id", help="Paper ID")
     p.add_argument("--l4", default=None, help="One-line summary (L4)")
-    p.add_argument("--l2", default=None, help="Key claims JSON string (L2)")
+    p.add_argument("--l2", nargs="*", default=None, help="Key claims (space-separated strings, or single JSON array for backward compat)")
     p.add_argument("--model", default="", help="Model name for provenance")
 
     # cite
     p = sub.add_parser("cite", help="Add citation edge")
-    p.add_argument("from_id", help="Citing paper ID")
-    p.add_argument("to_id", help="Cited paper ID")
+    p.add_argument("from_id", nargs="?", default=None, help="Citing paper ID")
+    p.add_argument("to_id", nargs="?", default=None, help="Cited paper ID")
     p.add_argument("--type", default="cites", dest="type",
                    choices=["cites", "extends", "contradicts", "uses_method", "uses_dataset", "surveys"])
+    p.add_argument("--batch", default=None, help="JSON file of citation edges")
 
     # status
     p = sub.add_parser("status", help="Set reading status")
@@ -1138,9 +1262,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="Paper ID")
 
     # import
-    p = sub.add_parser("import", help="Bulk-add papers from URL file or BibTeX")
-    p.add_argument("file", help="Text file (arXiv URLs) or .bib file (BibTeX)")
+    p = sub.add_parser("import", help="Bulk-add papers from URL file, BibTeX, or JSON")
+    p.add_argument("file", help="Text file (arXiv URLs), .bib file (BibTeX), or .json file")
     p.add_argument("--bib", action="store_true", help="Force BibTeX parsing (auto-detected for .bib files)")
+    p.add_argument("--json", action="store_true", dest="json_import", help="Force JSON parsing (auto-detected for .json files)")
     p.add_argument("--no-pdf", action="store_true", help="Skip PDF downloads")
 
     # export (updated to support --format)
@@ -1153,6 +1278,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("query", help="Search query")
     p.add_argument("--source", choices=["arxiv", "s2"], default="arxiv")
     p.add_argument("--limit", type=int, default=10)
+    p.add_argument("--add", action="store_true", help="Auto-add found papers to collection")
 
     # read
     p = sub.add_parser("read", help="Guided reading view for a paper")
@@ -1160,6 +1286,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # progress
     sub.add_parser("progress", help="Visual progress dashboard")
+
+    # dedup
+    p = sub.add_parser("dedup", help="Find and merge duplicate papers")
+    p.add_argument("--merge", action="store_true", help="Auto-merge duplicates (keeps richest record)")
 
     # install-skill
     sub.add_parser("install-skill", help="Install SKILL.md for agent integration")
@@ -1195,6 +1325,7 @@ HANDLERS = {
     "find": _cmd_find,
     "read": _cmd_read,
     "progress": _cmd_progress,
+    "dedup": _cmd_dedup,
 }
 
 
