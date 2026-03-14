@@ -1,83 +1,91 @@
 # alit
 
-Literature review tool for AI coding agents. Zero dependencies. SQLite-only.
+Your AI agent reads papers so you don't have to.
 
-The agent is the intelligence — alit is data plumbing.
+`pip install alit` → zero dependencies, SQLite-only, works with any coding agent.
 
-Tell your agent: `"Use alit to manage my literature review. See https://github.com/Zhou-Hangyu/alit"`
+Got tokens to burn? Let your agent read 50 papers overnight and hand you a synthesis in the morning.
 
-## What is alit
+Tell your agent:
+
+```
+Use alit to manage my literature review. See https://github.com/Zhou-Hangyu/alit
+```
+
+## How it works
+
+```
+You add papers → alit stores in SQLite → agent reads, summarizes, builds citation graph
+                                       → PDFs auto-downloaded from arXiv
+                                       → PageRank ranks what to read next
+                                       → BM25 search across 10K+ papers in milliseconds
+```
 
 ```
 .alit/
-├── papers.db    ← SQLite (sole source of truth)
-└── pdfs/        ← downloaded PDFs
+├── papers.db    ← one file, entire literature collection
+└── pdfs/        ← auto-downloaded from arXiv
 ```
 
-No servers. No API keys. No vector databases. Scales to 10K+ papers.
-
-- **Search**: BM25 via SQLite FTS5
-- **Ranking**: PageRank on citation graph (pure Python)
-- **Recommendations**: PageRank + recency + purpose keyword matching
-- **Synthesis**: multi-stage funnel retrieval (~5K tokens to query 10K papers)
-- **Enrichment**: arXiv API (batched) with Semantic Scholar fallback
-- **Backward compatible**: schema auto-migrates on upgrade
+No servers. No API keys. No vector databases. No setup beyond `pip install`.
 
 ## Install
 
 ```bash
-pip install alit    # or: uv add alit
-alit init           # creates .alit/ in your project
-alit install-skill  # teaches your agent how to use alit
+pip install alit         # or: uv add alit
+alit init                # creates .alit/ in your project
+alit install-skill       # teaches your agent the full workflow
+```
+
+## Quick taste
+
+```bash
+alit add "https://arxiv.org/abs/1706.03762"     # fetches metadata + PDF
+alit add "https://arxiv.org/abs/1810.04805"     # add as many as you want
+alit import library.bib                          # or dump your Zotero/Mendeley
+alit recommend 5                                 # what should I read next?
+alit ask "What are the key attention mechanisms?" --depth 2
 ```
 
 ## Commands
 
 | Command | What it does |
 |---------|-------------|
-| `alit init` | Initialize `.alit/` in current project |
-| `alit add <title-or-url>` | Add paper (auto-enriches arXiv URLs, auto-tags) |
+| `alit init` | Initialize `.alit/` |
+| `alit add <title-or-url>` | Add paper (auto-enriches arXiv, auto-tags) |
 | `alit find <query>` | Search arXiv/S2 for papers by topic |
 | `alit import <file>` | Bulk-add from URL file or BibTeX (.bib) |
 | `alit enrich` | Batch-fetch metadata for papers missing abstracts |
 | `alit search <query>` | BM25 full-text search |
-| `alit recommend [N]` | Reading queue ranked by PageRank + relevance + recency |
+| `alit recommend [N]` | Reading queue ranked by score |
 | `alit ask <question>` | Cross-paper synthesis via funnel retrieval |
-| `alit read <id>` | Guided reading view with citations |
-| `alit show <id>` | Paper details |
-| `alit list` | List all papers |
+| `alit read <id>` | Guided reading view |
+| `alit show <id>` | Paper details + citations |
+| `alit list` | List papers |
 | `alit note <id> <text>` | Append reading notes |
-| `alit summarize <id>` | Store L4/L2 summary with model provenance |
+| `alit summarize <id>` | Store summary with model provenance |
 | `alit cite <from> <to>` | Add citation edge |
-| `alit status <id> <s>` | Set reading status (unread/skimmed/read/synthesized) |
+| `alit status <id> <s>` | Set reading status |
 | `alit tag <id> <tags>` | Set tags |
 | `alit purpose [text]` | Set or show research purpose |
 | `alit progress` | Visual progress dashboard |
-| `alit stats` | Collection overview with coverage |
-| `alit orphans` | Citations pointing to missing papers |
+| `alit stats` | Collection overview |
+| `alit orphans` | Find citations to missing papers |
 | `alit attach <id> <pdf>` | Attach local PDF |
 | `alit fetch-pdf <id>` | Download PDF from arXiv |
 | `alit delete <id>` | Remove paper + citations |
 | `alit export [--format X]` | Export as JSON or markdown |
-| `alit install-skill` | Install SKILL.md for coding agents |
 
-All commands support `--json` for machine-readable output.
+All commands support `--json`.
 
-## Importing Papers
+## Under the hood
 
-```bash
-# arXiv URL (auto-fetches metadata + PDF)
-alit add "https://arxiv.org/abs/1706.03762"
-
-# Local PDF
-alit add "Paper Title" --pdf /path/to/paper.pdf
-
-# Bulk from file (one arXiv URL per line)
-alit import papers.txt
-
-# From Zotero / Mendeley / Google Scholar (.bib export)
-alit import library.bib
-```
+- **Search**: BM25 via SQLite FTS5
+- **Ranking**: PageRank on citation graph (pure Python, no scipy)
+- **Recommendations**: PageRank + recency + research purpose matching
+- **Synthesis**: multi-stage funnel retrieval (~5K tokens to query 10K papers)
+- **Enrichment**: arXiv API (batched) with Semantic Scholar fallback
+- **Backward compatible**: schema auto-migrates on upgrade
 
 ## Development
 
