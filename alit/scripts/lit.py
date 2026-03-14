@@ -58,7 +58,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         return 0
     conn = init_db(target)
     conn.close()
-    print(f"Initialized {target / LIT_DIR}/")
+    print(f"(-o-) Initialized {target / LIT_DIR}/")
     print()
     print("Next steps:")
     print('  alit add "Paper Title" --year 2024 --abstract "..."')
@@ -162,7 +162,7 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
         print(json.dumps(paper, ensure_ascii=False))
     else:
         pdf_msg = f" | pdf: {paper.get('pdf_path')}" if paper and paper.get("pdf_path") else ""
-        print(f"Added: {paper_id}{pdf_msg}")
+        print(f"(-o+) Added: {paper_id}{pdf_msg}")
     return 0
 
 
@@ -235,7 +235,7 @@ def _cmd_list(args: argparse.Namespace, conn) -> int:
         print(json.dumps(papers, ensure_ascii=False))
     else:
         if not papers:
-            print("No papers found.")
+            print("(xox) No papers found.")
             return 0
         for p in papers:
             year = p["year"] or "????"
@@ -257,7 +257,7 @@ def _cmd_search(args: argparse.Namespace, conn) -> int:
         print(json.dumps(results, ensure_ascii=False))
     else:
         if not results:
-            print("No results found.")
+            print("(xox) No results found.")
             return 0
         for r in results:
             year = r.get("year") or "????"
@@ -274,7 +274,7 @@ def _cmd_note(args: argparse.Namespace, conn) -> int:
     existing = paper.get("notes") or ""
     new_notes = (existing + "\n" + args.text).strip()
     update_paper(conn, args.id, notes=new_notes)
-    print(f"Note added to {args.id}")
+    print(f"(-o+) Note added to {args.id}")
     return 0
 
 
@@ -310,7 +310,7 @@ def _cmd_summarize(args: argparse.Namespace, conn) -> int:
         print(json.dumps(paper, ensure_ascii=False))
     else:
         level = "l4" if l4 is not None else "l2"
-        print(f"Summary ({level}) stored for {args.id}")
+        print(f"(-o+) Summary ({level}) stored for {args.id}")
     return 0
 
 
@@ -337,7 +337,7 @@ def _cmd_status(args: argparse.Namespace, conn) -> int:
         print(f"Paper not found: {args.id}", file=sys.stderr)
         return 1
     update_paper(conn, args.id, status=args.new_status)
-    print(f"Status updated: {args.id} → {args.new_status}")
+    print(f"(-o+) Status updated: {args.id} → {args.new_status}")
     return 0
 
 
@@ -347,7 +347,7 @@ def _cmd_tag(args: argparse.Namespace, conn) -> int:
         print(f"Paper not found: {args.id}", file=sys.stderr)
         return 1
     update_paper(conn, args.id, tags=args.tags)
-    print(f"Tags updated: {args.id} → {args.tags}")
+    print(f"(-o+) Tags updated: {args.id} → {args.tags}")
     return 0
 
 
@@ -380,7 +380,7 @@ def _cmd_recommend(args: argparse.Namespace, conn) -> int:
         return 0
 
     if not results:
-        print("No recommendations. All papers read or corpus empty.")
+        print("(xox) No recommendations. All papers read or corpus empty.")
         return 0
 
     verbose = getattr(args, "verbose", False)
@@ -437,7 +437,7 @@ def _cmd_stats(args: argparse.Namespace, conn) -> int:
 def _cmd_delete(args: argparse.Namespace, conn) -> int:
     deleted = delete_paper(conn, args.id)
     if deleted:
-        print(f"Deleted: {args.id}")
+        print(f"(-o-) Deleted: {args.id}")
         return 0
     else:
         print(f"Paper not found: {args.id}", file=sys.stderr)
@@ -562,7 +562,7 @@ def _cmd_taste(args: argparse.Namespace, conn) -> int:
         return 0
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('taste', ?)", (text,))
     conn.commit()
-    print(f"Taste set ({len(text)} chars)")
+    print(f"(-o+) Taste set ({len(text)} chars)")
     return 0
 
 
@@ -729,7 +729,7 @@ def _cmd_find(args: argparse.Namespace, conn) -> int:
         entries = root.findall("atom:entry", ns)
 
         if not entries:
-            print("No results found.")
+            print("(xox) No results found.")
             return 0
 
         results = []
@@ -783,7 +783,7 @@ def _cmd_find(args: argparse.Namespace, conn) -> int:
 
         papers = data.get("data", [])
         if not papers:
-            print("No results found.")
+            print("(xox) No results found.")
             return 0
 
         if getattr(args, "json", False):
@@ -852,7 +852,7 @@ def _cmd_progress(args: argparse.Namespace, conn) -> int:
     stats = get_stats(conn)
     total = stats["total"]
     if total == 0:
-        print("No papers yet. Run: alit add \"https://arxiv.org/abs/...\"")
+        print("(xox) No papers yet. Run: alit add \"https://arxiv.org/abs/...\"")
         return 0
 
     if getattr(args, "json", False):
@@ -1108,7 +1108,7 @@ def run(argv: list[str] | None = None, *, root: str | Path | None = None) -> int
     new_db = db_path / LIT_DIR / DB_NAME
     old_db = db_path / DB_NAME
     if not new_db.exists() and not old_db.exists():
-        print("Not initialized. Run 'alit init' first.", file=sys.stderr)
+        print("(xox) Not initialized. Run 'alit init' first.", file=sys.stderr)
         return 1
 
     conn = get_db(db_path)

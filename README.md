@@ -1,4 +1,4 @@
-# alit
+# (-o-) alit
 
 Your AI agent reads papers so you don't have to.
 
