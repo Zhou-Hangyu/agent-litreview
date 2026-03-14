@@ -4,23 +4,15 @@ Your AI agent reads papers so you don't have to.
 
 `pip install agent-lit` → zero dependencies, SQLite-only, works with any coding agent.
 
-Got tokens to burn? Let your agent read 50 papers overnight and hand you a synthesis in the morning.
+Same spirit as [autoresearch](https://github.com/karpathy/autoresearch) — but for the literature review that comes before experiments. Give your agent a research taste, point it at arXiv, and let it go. It reads papers, writes summaries, builds a citation graph, and ranks what to read next. You wake up to a structured knowledge base instead of 47 open browser tabs. The agent modifies the knowledge. You modify the taste. That's the whole loop.
+
+Why not just web search? Your agent forgets everything next session. alit is persistent memory — one agent reads 50 papers, another queries that knowledge instantly. Knowledge compounds across sessions.
 
 Tell your agent:
 
 ```
 Use alit to manage my literature review. See https://github.com/Zhou-Hangyu/alit
 ```
-
-## The idea
-
-Same spirit as [autoresearch](https://github.com/karpathy/autoresearch) — but for the literature review that comes before experiments. Give your agent a research taste, point it at arXiv, and let it go. It reads papers, writes summaries, builds a citation graph, and ranks what to read next. You wake up to a structured knowledge base instead of 47 open browser tabs.
-
-The agent modifies the knowledge. You modify the taste. That's the whole loop.
-
-## Why alit
-
-Your agent can web-search papers anytime — but forgets everything next session. alit is persistent memory. One agent reads 50 papers, another agent queries that knowledge instantly. Knowledge compounds across sessions.
 
 ## How it works
 
