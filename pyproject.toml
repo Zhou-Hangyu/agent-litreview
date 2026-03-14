@@ -1,38 +1,17 @@
 [project]
 name = "agent-litreview"
-version = "0.1.0"
-description = "Agent-native literature review system. BM25 search, citation PageRank, funnel retrieval, and progressive summarization over 10K+ papers."
+version = "0.2.0"
+description = "Lightweight, agent-native literature review system. Zero dependencies. SQLite-only."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
-keywords = ["literature-review", "research", "papers", "agents", "BM25", "citation-graph"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering",
-]
-dependencies = [
-    "ruamel.yaml>=0.18.0",
-    "requests>=2.31.0",
-    "jinja2>=3.1.0",
-    "pymupdf>=1.24.0",
-]
-
-[project.optional-dependencies]
-pagerank = ["scipy>=1.11.0"]
-dev = [
-    "pytest>=8.0.0",
-    "responses>=0.25.0",
-]
+keywords = ["literature-review", "research", "agents", "sqlite"]
 
 [project.scripts]
 lit = "literature.scripts.lit:main"
 
 [project.urls]
-Homepage = "https://github.com/hangyuzhou/agent-litreview"
-Repository = "https://github.com/hangyuzhou/agent-litreview"
+Repository = "https://github.com/Zhou-Hangyu/agent-litreview"
 
 [build-system]
 requires = ["hatchling"]
@@ -42,7 +21,7 @@ build-backend = "hatchling.build"
 packages = ["literature"]
 
 [tool.uv]
-dev-dependencies = ["pytest>=8.0.0", "responses>=0.25.0"]
+dev-dependencies = ["pytest>=8.0.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["literature/tests"]

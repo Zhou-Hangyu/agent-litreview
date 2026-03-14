@@ -1,532 +1,515 @@
 #!/usr/bin/env python3
-"""lit — unified CLI for the literature v3 system.
+"""lit — lightweight CLI for the literature review system.
+
+Zero dependencies. SQLite is the sole source of truth.
+The agent does all the intelligence — this is pure data plumbing.
 
 Usage:
-    lit <command> [options]
-    uv run python literature/scripts/lit.py <command> [options]
-
-Commands:
-    rebuild         Sync markdown files into SQLite index
-    search          BM25 full-text search across papers
-    paper           Show paper details and summaries
-    recommend       Get "what to read next" recommendations
-    discover        Find new papers via S2 or arXiv RSS
-    ask             Cross-paper synthesis (funnel retrieval)
-    stats           Collection overview
-    migrate         Import v1 papers into v3 schema
-    add             Add a paper from URL (wraps enrich.py)
-    status          Reading queue status
-    ingest          Manage progressive summarization queue
-    inbox           View/act on discovered papers
-    init            Scaffold a new literature/ directory
-    install-skill   Install agent SKILL.md to ~/.agents/skills/
+    lit init
+    lit add "Paper Title" --year 2024 --abstract "..."
+    lit search "attention"
+    lit recommend 5
+    lit ask "what approaches exist for X?"
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
+from literature.scripts.db import DB_NAME, add_citation, add_paper, delete_paper
+from literature.scripts.db import fetch_pdf_for_paper, get_db, get_paper, get_stats
+from literature.scripts.db import init_db, list_papers, update_paper
 
-from literature.scripts.rebuild_index import _find_literature_root
+
+# ── Helper ─────────────────────────────────────────────────────────────────────
 
 
-def _cmd_rebuild(args: argparse.Namespace, lit_root: Path) -> int:
-    from literature.scripts.db import init_db, sync_from_markdown
-    from literature.scripts.pagerank import compute_pagerank, store_pagerank_scores
+def _auto_id(title: str) -> str:
+    """Generate a simple id from title: lowercase, spaces→underscores, truncated."""
+    import re
+    slug = re.sub(r"[^a-z0-9\s]", "", title.lower())
+    words = slug.split()[:4]
+    return "_".join(words) or "paper"
 
-    conn = init_db(lit_root)
-    result = sync_from_markdown(lit_root, conn, verbose=True)
 
-    scores = compute_pagerank(conn)
-    store_pagerank_scores(conn, scores)
+# ── Commands ───────────────────────────────────────────────────────────────────
 
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    target = Path(getattr(args, "path", None) or ".")
+    target.mkdir(parents=True, exist_ok=True)
+    db_path = target / DB_NAME
+    if db_path.exists():
+        print(f"papers.db already exists at {db_path}")
+        return 0
+    conn = init_db(target)
     conn.close()
-    if getattr(args, "json", False):
-        import json as _json
-        print(_json.dumps(result))
-    else:
-        print(f"Rebuilt: {result['papers']} papers, {result['citations']} citations synced")
-        if result["skipped"]:
-            print(f"  ({result['skipped']} files skipped due to errors)")
+    print(f"Initialized papers.db at {db_path}")
+    print()
+    print("Next steps:")
+    print('  lit add "Paper Title" --year 2024 --abstract "..."')
+    print('  lit search "topic"')
+    print("  lit recommend 5")
     return 0
 
 
-def _cmd_search(args: argparse.Namespace, lit_root: Path) -> int:
-    """BM25 full-text search across papers (or similarity search)."""
-    from literature.scripts.search import search, similar
-    import json as _json
+def _cmd_add(args: argparse.Namespace, conn) -> int:
+    title = args.title
+    paper_id = getattr(args, "id", None) or _auto_id(title)
+    kwargs = {}
+    for field in ("year", "authors", "abstract", "url", "arxiv_id", "doi", "tags"):
+        val = getattr(args, field, None)
+        if val is not None:
+            kwargs[field] = val
+    arxiv = getattr(args, "arxiv", None)
+    if arxiv:
+        kwargs["arxiv_id"] = arxiv
 
-    top_k = getattr(args, "top_k", 20)
+    paper = add_paper(conn, paper_id, title, **kwargs)
 
-    if getattr(args, "similar", None):
-        results = similar(args.similar, lit_root, top_k=top_k)
-    else:
-        query = getattr(args, "query", "")
-        results = search(query, lit_root, top_k=top_k)
+    no_pdf = getattr(args, "no_pdf", False)
+    if not no_pdf:
+        db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
+        pdf = fetch_pdf_for_paper(conn, paper_id, db_path)
+        if pdf:
+            paper = get_paper(conn, paper_id)
 
     if getattr(args, "json", False):
-        print(_json.dumps(results, ensure_ascii=False))
+        print(json.dumps(paper, ensure_ascii=False))
+    else:
+        pdf_msg = f" | pdf: {paper.get('pdf_path')}" if paper.get("pdf_path") else ""
+        print(f"Added: {paper_id}{pdf_msg}")
+    return 0
+
+
+def _cmd_show(args: argparse.Namespace, conn) -> int:
+    paper = get_paper(conn, args.id)
+    if paper is None:
+        print(f"Paper not found: {args.id}", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps(paper, ensure_ascii=False))
+    else:
+        print(f"id:        {paper['id']}")
+        print(f"title:     {paper['title']}")
+        print(f"authors:   {paper['authors']}")
+        print(f"year:      {paper['year']}")
+        print(f"status:    {paper['status']}")
+        print(f"tags:      {paper['tags']}")
+        print(f"abstract:  {(paper['abstract'] or '')[:200]}")
+        print(f"notes:     {(paper['notes'] or '')[:200]}")
+        print(f"summary_l4: {paper['summary_l4']}")
+        print(f"pagerank:  {paper['pagerank']:.6f}")
+        print(f"url:       {paper['url']}")
+        print(f"pdf:       {paper.get('pdf_path', '')}")
+    return 0
+
+
+def _cmd_list(args: argparse.Namespace, conn) -> int:
+    status = getattr(args, "status", None)
+    tag = getattr(args, "tag", None)
+    papers = list_papers(conn, status=status)
+    if tag:
+        papers = [p for p in papers if tag in (p.get("tags") or "")]
+    if getattr(args, "json", False):
+        print(json.dumps(papers, ensure_ascii=False))
+    else:
+        if not papers:
+            print("No papers found.")
+        for p in papers:
+            year = p["year"] or "????"
+            st = (p["status"] or "unread")[:8]
+            print(f"[{st:8s}] {p['id']:<40s} ({year})  {(p['title'] or '')[:60]}")
+    return 0
+
+
+def _cmd_search(args: argparse.Namespace, conn) -> int:
+    from literature.scripts.search import search
+
+    top_k = getattr(args, "top_k", 20)
+    results = search(conn, args.query, top_k=top_k)
+    if getattr(args, "json", False):
+        print(json.dumps(results, ensure_ascii=False))
     else:
         if not results:
             print("No results found.")
             return 0
         for r in results:
-            status = r.get("reading_status", "unread") or "unread"
-            year = r.get("year") or ""
-            print(
-                f"[{status:12s}] {r['paper_id']:<40s} ({year})  "
-                f"{(r.get('title') or '')[:60]}"
-            )
-            if r.get("snippet"):
-                print(f"             {r['snippet'][:80]}")
+            year = r.get("year") or "????"
+            st = (r.get("status") or "unread")[:8]
+            print(f"[{st:8s}] {r['id']:<40s} ({year})  {(r.get('title') or '')[:60]}")
     return 0
 
 
-def _cmd_paper(args: argparse.Namespace, lit_root: Path) -> int:
-    """Stub: Show paper details and summaries."""
-    print("lit paper: Not yet implemented. See Task 8 (paper_details).")
+def _cmd_note(args: argparse.Namespace, conn) -> int:
+    paper = get_paper(conn, args.id)
+    if paper is None:
+        print(f"Paper not found: {args.id}", file=sys.stderr)
+        return 1
+    existing = paper.get("notes") or ""
+    new_notes = (existing + "\n" + args.text).strip()
+    update_paper(conn, args.id, notes=new_notes)
+    print(f"Note added to {args.id}")
     return 0
 
 
-def _cmd_recommend(args: argparse.Namespace, lit_root: Path) -> int:
-    from literature.scripts.recommend import recommend_next
-    import json as _json
+def _cmd_summarize(args: argparse.Namespace, conn) -> int:
+    paper = get_paper(conn, args.id)
+    if paper is None:
+        print(f"Paper not found: {args.id}", file=sys.stderr)
+        return 1
 
-    raw_args = getattr(args, "args", []) or []
-    nums = [a for a in raw_args if a != "next"]
-    top_k = int(nums[0]) if nums else 10
-    results = recommend_next(lit_root, top_k=top_k)
+    model = getattr(args, "model", "") or ""
+    l4 = getattr(args, "l4", None)
+    l2 = getattr(args, "l2", None)
 
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    kwargs: dict = {}
+    if l4 is not None:
+        kwargs["summary_l4"] = l4
+        kwargs["summary_l4_model"] = model
+        kwargs["summary_l4_at"] = now
+    if l2 is not None:
+        kwargs["summary_l2"] = l2
+        kwargs["summary_l2_model"] = model
+        kwargs["summary_l2_at"] = now
+
+    if not kwargs:
+        print("Error: provide --l4 or --l2", file=sys.stderr)
+        return 1
+
+    paper = update_paper(conn, args.id, **kwargs)
     if getattr(args, "json", False):
-        print(_json.dumps(results, ensure_ascii=False))
+        print(json.dumps(paper, ensure_ascii=False))
+    else:
+        level = "l4" if l4 is not None else "l2"
+        print(f"Summary ({level}) stored for {args.id}")
+    return 0
+
+
+def _cmd_cite(args: argparse.Namespace, conn) -> int:
+    from_id = args.from_id
+    to_id = args.to_id
+    type_ = getattr(args, "type", "cites") or "cites"
+
+    if not get_paper(conn, from_id):
+        print(f"Paper not found: {from_id}", file=sys.stderr)
+        return 1
+    if not get_paper(conn, to_id):
+        print(f"Paper not found: {to_id}", file=sys.stderr)
+        return 1
+
+    add_citation(conn, from_id, to_id, type_)
+    print(f"Citation added: {from_id} --[{type_}]--> {to_id}")
+    return 0
+
+
+def _cmd_status(args: argparse.Namespace, conn) -> int:
+    paper = get_paper(conn, args.id)
+    if paper is None:
+        print(f"Paper not found: {args.id}", file=sys.stderr)
+        return 1
+    update_paper(conn, args.id, status=args.new_status)
+    print(f"Status updated: {args.id} → {args.new_status}")
+    return 0
+
+
+def _cmd_tag(args: argparse.Namespace, conn) -> int:
+    paper = get_paper(conn, args.id)
+    if paper is None:
+        print(f"Paper not found: {args.id}", file=sys.stderr)
+        return 1
+    update_paper(conn, args.id, tags=args.tags)
+    print(f"Tags updated: {args.id} → {args.tags}")
+    return 0
+
+
+def _cmd_recommend(args: argparse.Namespace, conn) -> int:
+    from literature.scripts.recommend import recommend
+
+    # Read purpose keywords if set
+    purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+    purpose_keywords: list[str] | None = None
+    if purpose_row and purpose_row["value"]:
+        text = purpose_row["value"]
+        # Extract simple keywords: split on whitespace, remove short words
+        words = [w.strip(".,;:()[]\"'") for w in text.split()]
+        purpose_keywords = [w for w in words if len(w) > 4][:30]
+
+    raw = getattr(args, "n", None)
+    top_k = int(raw) if raw else 10
+
+    results = recommend(conn, top_k=top_k, purpose_keywords=purpose_keywords)
+    if getattr(args, "json", False):
+        print(json.dumps(results, ensure_ascii=False))
     else:
         if not results:
             print("No recommendations. All papers read or corpus empty.")
             return 0
         for r in results:
-            bd = r.get("score_breakdown", {})
-            print(f"[{r['score']:.3f}] {r['paper_id']:<40s} ({r['year']})")
-            print(
-                f"         pr={bd.get('project_relevance', 0):.2f} "
-                f"cc={bd.get('co_citation', 0):.2f} "
-                f"re={bd.get('recency', 0):.2f} "
-                f"pa={bd.get('pagerank', 0):.2f}"
-            )
+            year = r.get("year") or "????"
+            print(f"[{r['score']:.3f}] {r['id']:<40s} ({year})  {(r.get('title') or '')[:50]}")
     return 0
 
 
-def _cmd_discover(args: argparse.Namespace, lit_root: Path) -> int:
-    """Find new papers via S2 recommendations or arXiv RSS."""
-    from literature.scripts.discover import discover_arxiv, discover_s2
-
-    import json as _json
-
-    source = getattr(args, "source", "all")
-    limit = getattr(args, "limit", 20)
-    found: list[dict] = []
-
-    if source in ("s2", "all"):
-        found.extend(discover_s2(lit_root, limit=limit))
-    if source in ("arxiv", "all"):
-        cats: list[str] = list((getattr(args, "categories", None) or "cs.LG").split(","))
-        found.extend(discover_arxiv(lit_root, cats, limit=limit))
-
-    if getattr(args, "json", False):
-        print(_json.dumps(found))
-    else:
-        print(f"Discovered {len(found)} new papers added to inbox.")
-    return 0
-
-
-def _cmd_ask(args: argparse.Namespace, lit_root: Path) -> int:
-    """Cross-paper synthesis via funnel retrieval."""
-    from literature.scripts.synthesize import funnel_retrieve, format_funnel_output
-    import json as _json
+def _cmd_ask(args: argparse.Namespace, conn) -> int:
+    from literature.scripts.synthesize import format_funnel_output, funnel_retrieve
 
     depth = getattr(args, "depth", 2)
-    result = funnel_retrieve(args.question, lit_root, depth=depth)
-
+    result = funnel_retrieve(conn, args.question, depth=depth)
     if getattr(args, "json", False):
-        print(_json.dumps(result, ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=False))
     else:
         print(format_funnel_output(result))
     return 0
 
 
-def _cmd_stats(args: argparse.Namespace, lit_root: Path) -> int:
-    """Stub: Collection overview."""
-    print("lit stats: Not yet implemented. See Task 12 (collection_stats).")
-    return 0
-
-
-def _cmd_generate(args: argparse.Namespace, lit_root: Path) -> int:
-    """Generate LaTeX literature review from theme files."""
-    from literature.scripts.generate_review import generate
-    
-    title = getattr(args, "title", "Literature Review")
-    authors = getattr(args, "authors", "")
-    abstract = getattr(args, "abstract", "A comprehensive literature review.")
-    
-    generate(lit_root, title=title, authors=authors, abstract=abstract)
-    return 0
-
-
-def _cmd_migrate(args: argparse.Namespace, lit_root: Path) -> int:
-    """Import v1 papers into v3 schema."""
-    from literature.scripts.migrate import migrate_from_v1
-    import json as _json
-
-    result = migrate_from_v1(lit_root)
+def _cmd_stats(args: argparse.Namespace, conn) -> int:
+    stats = get_stats(conn)
     if getattr(args, "json", False):
-        print(_json.dumps(result))
+        print(json.dumps(stats, ensure_ascii=False))
     else:
-        print(f"Migration complete: {result['papers']} papers, {result['citations']} citations")
-        if result["warnings"]:
-            print("Warnings:")
-            for w in result["warnings"]:
-                print(w)
+        print(f"Total papers: {stats['total']}")
+        print(f"Citations:    {stats['citations']}")
+        print(f"Purpose set:  {stats['has_purpose']}")
+        print("By status:")
+        for st, cnt in sorted(stats["by_status"].items()):
+            print(f"  {st:15s}: {cnt}")
     return 0
 
 
-def _cmd_add(args: argparse.Namespace, lit_root: Path) -> int:
-    """Stub: Add a paper from URL (wraps enrich.py)."""
-    print("lit add: Not yet implemented. See Task 14 (add_paper).")
-    return 0
-
-
-def _cmd_status(args: argparse.Namespace, lit_root: Path) -> int:
-    """Stub: Reading queue status."""
-    print("lit status: Not yet implemented. See Task 15 (reading_status).")
-    return 0
-
-
-def _cmd_ingest(args: argparse.Namespace, lit_root: Path) -> int:
-    """Manage progressive summarization queue."""
-    from literature.scripts.ingest import get_ingest_queue, get_ingest_status
-    import json as _json
-
-    if getattr(args, "show_status", False):
-        status = get_ingest_status(lit_root)
-        if getattr(args, "json", False):
-            print(_json.dumps(status))
-        else:
-            print(f"L4 summaries: {status['l4_done']}/{status['total']} done ({status['l4_needed']} needed)")
-            print(f"L2 summaries: {status['l2_done']}/{status['total']} done ({status['l2_needed']} needed)")
+def _cmd_delete(args: argparse.Namespace, conn) -> int:
+    deleted = delete_paper(conn, args.id)
+    if deleted:
+        print(f"Deleted: {args.id}")
         return 0
-
-    queue = get_ingest_queue(lit_root, level="l4")
-    if getattr(args, "json", False):
-        print(_json.dumps(queue))
     else:
-        print(f"{len(queue)} papers need L4 summarization (by PageRank importance):")
-        for item in queue[:20]:
-            print(f"  [{item['pagerank_score']:.4f}] {item['paper_id']}: {item['title'][:60]}")
-        if len(queue) > 20:
-            print(f"  ... and {len(queue) - 20} more")
-    return 0
-
-
-def _cmd_inbox(args: argparse.Namespace, lit_root: Path) -> int:
-    """View and act on discovered papers."""
-    from literature.scripts.discover import add_from_inbox, get_inbox
-
-    import json as _json
-
-    action = getattr(args, "action", None)
-    paper_id = getattr(args, "paper_id", None)
-
-    if action == "add" and paper_id:
-        citekey = add_from_inbox(int(paper_id), lit_root)
-        print(f"Added: {citekey}")
-        return 0
-
-    if action == "dismiss" and paper_id:
-        from literature.scripts.db import init_db
-
-        db = init_db(lit_root)
-        db.execute(
-            "UPDATE discovery_inbox SET status = 'dismissed' WHERE id = ?",
-            (int(paper_id),),
-        )
-        db.commit()
-        print(f"Dismissed inbox item {paper_id}")
-        return 0
-
-    items = get_inbox(lit_root)
-    if getattr(args, "json", False):
-        print(_json.dumps(items))
-    else:
-        if not items:
-            print("No pending discoveries in inbox.")
-        else:
-            for item in items:
-                score = item.get("relevance_score", 0) or 0
-                title = (item.get("title") or "")[:60]
-                print(
-                    f"[{score:.2f}] #{item['id']} {item['paper_id']}: {title}"
-                )
-    return 0
-
-
-def _cmd_init(args: argparse.Namespace, _lit_root: Path) -> int:
-    """Scaffold a new literature/ directory in the current project."""
-    import shutil
-
-    target = Path(getattr(args, "path", None) or ".") / "literature"
-    if target.exists() and any(target.iterdir()):
-        print(f"Error: {target} already exists and is not empty.")
+        print(f"Paper not found: {args.id}", file=sys.stderr)
         return 1
 
-    # Find scaffold directory inside the installed package
-    scaffold_dir = Path(__file__).resolve().parent.parent / "scaffold"
-    if not scaffold_dir.exists():
-        print(f"Error: scaffold directory not found at {scaffold_dir}")
-        return 1
 
-    target.mkdir(parents=True, exist_ok=True)
-
-    # Copy scaffold contents
-    for item in scaffold_dir.rglob("*"):
-        rel = item.relative_to(scaffold_dir)
-        dest = target / rel
-        if item.is_dir():
-            dest.mkdir(parents=True, exist_ok=True)
-        else:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, dest)
-
-    # Copy templates from the package
-    templates_src = Path(__file__).resolve().parent.parent / "templates"
-    if templates_src.exists():
-        templates_dest = target / "templates"
-        shutil.copytree(templates_src, templates_dest, dirs_exist_ok=True)
-
-    print(f"Initialized literature/ at {target.resolve()}")
-    print()
-    print("Next steps:")
-    print("  1. Edit literature/PURPOSE.md with your research goals")
-    print("  2. Add papers:  lit add 'https://arxiv.org/abs/1706.03762'")
-    print("  3. Build index: lit rebuild")
-    print("  4. Get recommendations: lit recommend 5")
-    print()
-    print("For agent integration: lit install-skill")
+def _cmd_export(args: argparse.Namespace, conn) -> int:
+    papers = [dict(r) for r in conn.execute("SELECT * FROM papers ORDER BY year DESC").fetchall()]
+    citations = [dict(r) for r in conn.execute("SELECT * FROM citations").fetchall()]
+    purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+    data = {
+        "papers": papers,
+        "citations": citations,
+        "purpose": purpose_row["value"] if purpose_row else "",
+    }
+    print(json.dumps(data, indent=2, ensure_ascii=False))
     return 0
 
 
-def _cmd_install_skill(args: argparse.Namespace, _lit_root: Path) -> int:
-    """Install the SKILL.md file for agent integration."""
+def _cmd_fetch_pdf(args: argparse.Namespace, conn) -> int:
+    db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
+    paper_id = args.id
+    paper = get_paper(conn, paper_id)
+    if not paper:
+        print(f"Paper not found: {paper_id}", file=sys.stderr)
+        return 1
+    pdf = fetch_pdf_for_paper(conn, paper_id, db_path)
+    if pdf:
+        print(f"Downloaded: {pdf}")
+    else:
+        print(f"No PDF available for {paper_id} (needs --arxiv or --url ending in .pdf)")
+    return 0
+
+
+def _cmd_purpose(args: argparse.Namespace, conn) -> int:
+    text = args.text
+    conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('purpose', ?)", (text,))
+    conn.commit()
+    print(f"Purpose set ({len(text)} chars)")
+    return 0
+
+
+def _cmd_install_skill(args: argparse.Namespace) -> int:
     import shutil
 
     skill_src = Path(__file__).resolve().parent.parent / "skill" / "SKILL.md"
     if not skill_src.exists():
-        print(f"Error: SKILL.md not found at {skill_src}")
+        print(f"Error: SKILL.md not found at {skill_src}", file=sys.stderr)
         return 1
-
     skill_dest = Path.home() / ".agents" / "skills" / "literature-review"
     skill_dest.mkdir(parents=True, exist_ok=True)
-
     shutil.copy2(skill_src, skill_dest / "SKILL.md")
     print(f"Installed SKILL.md to {skill_dest / 'SKILL.md'}")
-    print("Agents will now auto-detect the literature-review skill.")
     return 0
 
 
+# ── Parser ─────────────────────────────────────────────────────────────────────
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the argparse parser for the lit CLI."""
     parser = argparse.ArgumentParser(
         prog="lit",
-        description="Literature v3 — agent-native paper management system",
+        description="Lightweight literature review CLI. SQLite-only, zero dependencies.",
     )
-    parser.add_argument(
-        "--root",
-        type=Path,
-        default=None,
-        help="Path to literature/ directory (auto-detected if omitted)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output JSON instead of human-readable tables",
-    )
+    parser.add_argument("--json", action="store_true", help="Output JSON")
 
     sub = parser.add_subparsers(dest="cmd", metavar="COMMAND")
     sub.required = False
 
-    # rebuild
-    p = sub.add_parser("rebuild", help="Sync markdown files into SQLite index")
-    p.add_argument(
-        "--fetch-embeddings",
-        action="store_true",
-        help="Also fetch SPECTER2 embeddings (requires S2_API_KEY)",
-    )
+    # init
+    p = sub.add_parser("init", help="Create papers.db in current directory")
+    p.add_argument("--path", default=None, help="Target directory (default: .)")
+
+    # add
+    p = sub.add_parser("add", help="Add a paper")
+    p.add_argument("title", help="Paper title")
+    p.add_argument("--id", dest="id", default=None, help="Paper ID (auto-generated if omitted)")
+    p.add_argument("--year", type=int, default=None)
+    p.add_argument("--authors", default=None)
+    p.add_argument("--abstract", default=None)
+    p.add_argument("--url", default=None)
+    p.add_argument("--arxiv", default=None, dest="arxiv")
+    p.add_argument("--doi", default=None)
+    p.add_argument("--tags", default=None)
+    p.add_argument("--no-pdf", action="store_true", help="Skip PDF download")
+
+    # show
+    p = sub.add_parser("show", help="Show paper details")
+    p.add_argument("id", help="Paper ID")
+
+    # list
+    p = sub.add_parser("list", help="List papers")
+    p.add_argument("--status", default=None, help="Filter by status")
+    p.add_argument("--tag", default=None, help="Filter by tag")
 
     # search
-    p = sub.add_parser("search", help="BM25 full-text search across papers")
-    p.add_argument("query", help="Search query string")
-    p.add_argument(
-        "--top-k",
-        type=int,
-        default=20,
-        help="Number of results (default: 20)",
-    )
-    p.add_argument(
-        "--similar",
-        metavar="CITEKEY",
-        help="Find papers similar to this citekey instead of query",
-    )
+    p = sub.add_parser("search", help="BM25 full-text search")
+    p.add_argument("query", help="Search query")
+    p.add_argument("--top-k", type=int, default=20, dest="top_k")
 
-    # paper
-    p = sub.add_parser("paper", help="Show paper details and summaries")
-    p.add_argument("citekey", help="Paper citekey (e.g. vaswani2017attention)")
+    # note
+    p = sub.add_parser("note", help="Append note to a paper")
+    p.add_argument("id", help="Paper ID")
+    p.add_argument("text", help="Note text")
+
+    # summarize
+    p = sub.add_parser("summarize", help="Store a summary with provenance")
+    p.add_argument("id", help="Paper ID")
+    p.add_argument("--l4", default=None, help="One-line summary (L4)")
+    p.add_argument("--l2", default=None, help="Key claims JSON string (L2)")
+    p.add_argument("--model", default="", help="Model name for provenance")
+
+    # cite
+    p = sub.add_parser("cite", help="Add citation edge")
+    p.add_argument("from_id", help="Citing paper ID")
+    p.add_argument("to_id", help="Cited paper ID")
+    p.add_argument("--type", default="cites", dest="type",
+                   choices=["cites", "extends", "contradicts", "uses_method", "uses_dataset", "surveys"])
+
+    # status
+    p = sub.add_parser("status", help="Set reading status")
+    p.add_argument("id", help="Paper ID")
+    p.add_argument("new_status", help="New status (unread/skimmed/read/synthesized)")
+
+    # tag
+    p = sub.add_parser("tag", help="Set tags on a paper")
+    p.add_argument("id", help="Paper ID")
+    p.add_argument("tags", help="Comma-separated tags")
 
     # recommend
-    p = sub.add_parser("recommend", help="Get reading recommendations")
-    p.add_argument(
-        "args",
-        nargs="*",
-        metavar="[next] N",
-        help="Number of recommendations (default: 10). Accepts: 'recommend 5' or 'recommend next 5'",
-    )
-
-    # discover
-    p = sub.add_parser("discover", help="Find new papers via S2 or arXiv RSS")
-    p.add_argument(
-        "--source",
-        choices=["s2", "arxiv", "all"],
-        default="all",
-    )
-    p.add_argument(
-        "--categories",
-        help="arXiv categories (comma-separated, e.g. cs.LG,q-fin.TR)",
-    )
-    p.add_argument("--limit", type=int, default=20)
+    p = sub.add_parser("recommend", help="Reading recommendations")
+    p.add_argument("n", nargs="?", default=None, help="Number of results (default: 10)")
 
     # ask
-    p = sub.add_parser("ask", help="Cross-paper synthesis via funnel retrieval")
-    p.add_argument("question", help="Question to answer from the literature")
-    p.add_argument(
-        "--depth",
-        type=int,
-        default=2,
-        choices=[1, 2, 3, 4],
-        help="Funnel depth: 1=L4 scan only, 4=full paper details (default: 2)",
-    )
+    p = sub.add_parser("ask", help="Cross-paper synthesis")
+    p.add_argument("question", help="Research question")
+    p.add_argument("--depth", type=int, default=2, choices=[1, 2, 3, 4])
 
     # stats
     sub.add_parser("stats", help="Collection overview")
 
-    # generate
-    p = sub.add_parser("generate", help="Generate LaTeX literature review")
-    p.add_argument("--title", default="Literature Review", help="Review title")
-    p.add_argument("--authors", default="", help="Author names")
-    p.add_argument("--abstract", default="A comprehensive literature review.", help="Abstract text")
+    # delete
+    p = sub.add_parser("delete", help="Remove a paper")
+    p.add_argument("id", help="Paper ID")
 
-    # migrate
-    p = sub.add_parser("migrate", help="Import v1 papers into v3 schema")
-    p.add_argument(
-        "--from-v1",
-        action="store_true",
-        help="Migrate from v1 YAML-based system",
-    )
+    # export
+    sub.add_parser("export", help="Export collection as JSON")
 
-    # add
-    p = sub.add_parser("add", help="Add a paper from URL (wraps enrich.py)")
-    p.add_argument("url", help="arXiv URL, DOI, or other URL")
-    p.add_argument(
-        "--type",
-        dest="resource_type",
-        choices=["paper", "preprint", "blog", "talk", "code", "report"],
-        default=None,
-    )
-    p.add_argument("--citekey", default=None)
+    # purpose
+    p = sub.add_parser("purpose", help="Set research purpose")
+    p.add_argument("text", help="Purpose text")
 
-    # status
-    sub.add_parser("status", help="Reading queue status")
-
-    # ingest
-    p = sub.add_parser("ingest", help="Manage progressive summarization queue")
-    p.add_argument("--list", action="store_true", help="List papers needing summaries")
-    p.add_argument(
-        "--status",
-        action="store_true",
-        dest="show_status",
-        help="Show ingestion progress",
-    )
-
-    # inbox
-    p = sub.add_parser("inbox", help="View and act on discovered papers")
-    p.add_argument(
-        "action",
-        nargs="?",
-        choices=["add", "dismiss"],
-        help="Action on a discovered paper",
-    )
-    p.add_argument("paper_id", nargs="?", help="Paper ID for add/dismiss actions")
-
-    # init
-    p = sub.add_parser("init", help="Scaffold a new literature/ directory")
-    p.add_argument(
-        "--path",
-        type=str,
-        default=None,
-        help="Target directory (default: current working directory)",
-    )
+    # fetch-pdf
+    p = sub.add_parser("fetch-pdf", help="Download PDF for a paper")
+    p.add_argument("id", help="Paper ID")
 
     # install-skill
-    sub.add_parser("install-skill", help="Install agent SKILL.md to ~/.agents/skills/")
+    sub.add_parser("install-skill", help="Install SKILL.md for agent integration")
 
     return parser
 
 
-def run(argv: list[str] | None = None, *, root: Path | None = None) -> int:
+# ── Dispatch ───────────────────────────────────────────────────────────────────
+
+HANDLERS = {
+    "add": _cmd_add,
+    "show": _cmd_show,
+    "list": _cmd_list,
+    "search": _cmd_search,
+    "note": _cmd_note,
+    "summarize": _cmd_summarize,
+    "cite": _cmd_cite,
+    "status": _cmd_status,
+    "tag": _cmd_tag,
+    "recommend": _cmd_recommend,
+    "ask": _cmd_ask,
+    "stats": _cmd_stats,
+    "delete": _cmd_delete,
+    "export": _cmd_export,
+    "purpose": _cmd_purpose,
+    "fetch-pdf": _cmd_fetch_pdf,
+}
+
+
+def run(argv: list[str] | None = None, *, root: str | Path | None = None) -> int:
     """Run the lit CLI.
 
     Args:
         argv: Command-line arguments (default: sys.argv[1:]).
-        root: Path to the literature/ directory; overrides ``--root`` flag.
+        root: Path containing papers.db; overrides auto-detection.
 
     Returns:
-        Exit code.
+        Exit code (0 = success).
     """
     parser = _build_parser()
     args = parser.parse_args(argv)
-
     cmd = getattr(args, "cmd", None)
 
-    # init and install-skill don't need a literature root
+    # These don't need an existing DB
     if cmd == "init":
-        return _cmd_init(args, Path.cwd())
+        return _cmd_init(args)
     if cmd == "install-skill":
-        return _cmd_install_skill(args, Path.cwd())
-
+        return _cmd_install_skill(args)
     if cmd is None:
         parser.print_help()
         return 0
 
-    lit_root = root or args.root or _find_literature_root(Path.cwd())
-
-    handlers = {
-        "rebuild": _cmd_rebuild,
-        "search": _cmd_search,
-        "paper": _cmd_paper,
-        "recommend": _cmd_recommend,
-        "discover": _cmd_discover,
-        "ask": _cmd_ask,
-        "stats": _cmd_stats,
-        "generate": _cmd_generate,
-        "migrate": _cmd_migrate,
-        "add": _cmd_add,
-        "status": _cmd_status,
-        "ingest": _cmd_ingest,
-        "inbox": _cmd_inbox,
-    }
-    handler = handlers.get(cmd)
-    if handler is None:
-        parser.print_help()
+    # All other commands need papers.db
+    db_path = Path(root) if root else Path.cwd()
+    if not (db_path / DB_NAME).exists():
+        print(f"No papers.db found. Run 'lit init' first.", file=sys.stderr)
         return 1
-    return handler(args, lit_root)
+
+    conn = get_db(db_path)
+    args._db_path = str(db_path)
+    try:
+        handler = HANDLERS.get(cmd)
+        if handler is None:
+            parser.print_help()
+            return 1
+        return handler(args, conn)
+    finally:
+        conn.close()
 
 
 def main() -> None:
