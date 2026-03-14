@@ -198,8 +198,63 @@ def _enrich_one_s2(arxiv_id: str) -> dict | None:
     return result
 
 
+def _enrich_batch_arxiv(arxiv_ids: list[str]) -> dict[str, dict]:
+    """Fetch metadata for up to 50 papers in one arXiv API call."""
+    import xml.etree.ElementTree as ET
+    clean_ids = [_clean_arxiv_id(aid) for aid in arxiv_ids]
+    id_list = ",".join(clean_ids)
+    url = f"https://export.arxiv.org/api/query?id_list={id_list}&max_results={len(clean_ids)}"
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+    try:
+        xml_data = _fetch_url(url, timeout=60).decode("utf-8")
+    except Exception:
+        return {}
+
+    root = ET.fromstring(xml_data)
+    results: dict[str, dict] = {}
+
+    for entry in root.findall("atom:entry", ns):
+        entry_id_el = entry.find("atom:id", ns)
+        if entry_id_el is None or not entry_id_el.text:
+            continue
+        entry_url = entry_id_el.text
+
+        title_el = entry.find("atom:title", ns)
+        title = " ".join(title_el.text.strip().split()) if title_el is not None and title_el.text else ""
+        if "Error" in title or not title:
+            continue
+
+        summary_el = entry.find("atom:summary", ns)
+        abstract = " ".join(summary_el.text.strip().split()) if summary_el is not None and summary_el.text else ""
+        pub_el = entry.find("atom:published", ns)
+        year = int(pub_el.text[:4]) if pub_el is not None and pub_el.text else None
+        authors = [
+            a.find("atom:name", ns).text
+            for a in entry.findall("atom:author", ns)
+            if a.find("atom:name", ns) is not None and a.find("atom:name", ns).text
+        ]
+
+        matched_id = None
+        for orig, clean in zip(arxiv_ids, clean_ids):
+            if clean in entry_url:
+                matched_id = orig
+                break
+        if not matched_id:
+            continue
+
+        result: dict = {"authors": ", ".join(authors), "abstract": abstract, "url": entry_url}
+        if title:
+            result["title"] = title
+        if year:
+            result["year"] = year
+        results[matched_id] = result
+
+    return results
+
+
 def enrich_papers(conn: sqlite3.Connection, db_path: Path, *, fetch_pdfs: bool = True) -> dict:
-    """Batch-fetch metadata for papers missing abstracts. Tries arXiv first, falls back to S2."""
+    """Batch-fetch metadata for papers missing abstracts. Batches arXiv calls, falls back to S2."""
     import time
 
     papers = conn.execute(
@@ -208,33 +263,44 @@ def enrich_papers(conn: sqlite3.Connection, db_path: Path, *, fetch_pdfs: bool =
     if not papers:
         return {"enriched": 0, "total": 0, "errors": []}
 
+    id_to_paper = {r["arxiv_id"]: r["id"] for r in papers}
+    arxiv_ids = list(id_to_paper.keys())
     enriched = 0
     errors = []
 
-    for i, row in enumerate(papers):
-        arxiv_id, paper_id = row["arxiv_id"], row["id"]
+    BATCH_SIZE = 40
+    arxiv_results: dict[str, dict] = {}
+    for batch_start in range(0, len(arxiv_ids), BATCH_SIZE):
+        batch = arxiv_ids[batch_start:batch_start + BATCH_SIZE]
+        print(f"  Fetching arXiv batch {batch_start // BATCH_SIZE + 1} ({len(batch)} papers)...", flush=True)
+        arxiv_results.update(_enrich_batch_arxiv(batch))
+        if batch_start + BATCH_SIZE < len(arxiv_ids):
+            time.sleep(3)
+
+    for i, (arxiv_id, paper_id) in enumerate(id_to_paper.items()):
         source = "arxiv"
-        try:
-            result = _enrich_one_arxiv(arxiv_id)
-            if result is None:
-                source = "s2"
+        result = arxiv_results.get(arxiv_id)
+        if result is None:
+            source = "s2"
+            try:
                 result = _enrich_one_s2(arxiv_id)
-            if result is None:
-                errors.append(f"{arxiv_id}: not found on arXiv or S2")
-                time.sleep(3)
+                time.sleep(1)
+            except Exception as e:
+                errors.append(f"{arxiv_id} ({paper_id}): S2 fallback failed: {e}")
                 continue
 
-            update_paper(conn, paper_id, **result)
+        if result is None:
+            errors.append(f"{arxiv_id}: not found on arXiv or S2")
+            continue
 
+        try:
+            update_paper(conn, paper_id, **result)
             if fetch_pdfs:
                 fetch_pdf_for_paper(conn, paper_id, db_path)
-
             enriched += 1
-            print(f"  [{i + 1}/{len(papers)}] {paper_id} ({result.get('year', '?')}) via {source}", flush=True)
+            print(f"  [{i + 1}/{len(id_to_paper)}] {paper_id} ({result.get('year', '?')}) via {source}", flush=True)
         except Exception as e:
             errors.append(f"{arxiv_id} ({paper_id}): {e}")
-
-        time.sleep(3)
 
     return {"enriched": enriched, "total": len(papers), "errors": errors}
 
@@ -434,11 +500,24 @@ def get_stats(conn: sqlite3.Connection) -> dict:
         ).fetchall()
     }
     citations = conn.execute("SELECT COUNT(*) FROM citations").fetchone()[0]
+    orphans = conn.execute("""
+        SELECT COUNT(*) FROM citations c
+        LEFT JOIN papers p ON c.to_id = p.id WHERE p.id IS NULL
+    """).fetchone()[0]
+    with_pdf = conn.execute("SELECT COUNT(*) FROM papers WHERE pdf_path != '' AND pdf_path IS NOT NULL").fetchone()[0]
+    with_l4 = conn.execute("SELECT COUNT(*) FROM papers WHERE summary_l4 != '' AND summary_l4 IS NOT NULL").fetchone()[0]
+    with_l2 = conn.execute("SELECT COUNT(*) FROM papers WHERE summary_l2 != '' AND summary_l2 IS NOT NULL").fetchone()[0]
+    with_abstract = conn.execute("SELECT COUNT(*) FROM papers WHERE abstract != '' AND abstract IS NOT NULL").fetchone()[0]
     purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
     purpose = purpose_row["value"] if purpose_row else ""
     return {
         "total": total,
         "by_status": by_status,
         "citations": citations,
+        "orphan_citations": orphans,
+        "with_pdf": with_pdf,
+        "with_abstract": with_abstract,
+        "with_l4": with_l4,
+        "with_l2": with_l2,
         "has_purpose": bool(purpose),
     }

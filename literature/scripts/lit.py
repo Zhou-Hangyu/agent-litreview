@@ -65,17 +65,33 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_arxiv_url(text: str) -> str | None:
+    import re
+    m = re.search(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", text)
+    return m.group(1) if m else None
+
+
 def _cmd_add(args: argparse.Namespace, conn) -> int:
     title = args.title
-    paper_id = getattr(args, "id", None) or _auto_id(title, conn)
+
+    arxiv = getattr(args, "arxiv", None)
+    detected_arxiv = _is_arxiv_url(title)
+    if detected_arxiv and not arxiv:
+        arxiv = detected_arxiv
+        if title.startswith("http"):
+            title = f"arXiv:{detected_arxiv}"
+
+    paper_id = getattr(args, "id", None) or (f"arxiv_{detected_arxiv.replace('.', '_')}" if detected_arxiv else _auto_id(title, conn))
+
     kwargs = {}
-    for field in ("year", "authors", "abstract", "url", "arxiv_id", "doi", "tags"):
+    for field in ("year", "authors", "abstract", "url", "doi", "tags"):
         val = getattr(args, field, None)
         if val is not None:
             kwargs[field] = val
-    arxiv = getattr(args, "arxiv", None)
     if arxiv:
         kwargs["arxiv_id"] = arxiv
+        if "url" not in kwargs:
+            kwargs["url"] = f"https://arxiv.org/abs/{arxiv}"
 
     paper = add_paper(conn, paper_id, title, **kwargs)
 
@@ -109,20 +125,39 @@ def _cmd_show(args: argparse.Namespace, conn) -> int:
         print(f"Paper not found: {args.id}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):
-        print(json.dumps(paper, ensure_ascii=False))
+        from literature.scripts.db import get_citations
+        cites = get_citations(conn, args.id)
+        print(json.dumps({**paper, "citations": cites}, ensure_ascii=False))
     else:
-        print(f"id:        {paper['id']}")
-        print(f"title:     {paper['title']}")
-        print(f"authors:   {paper['authors']}")
-        print(f"year:      {paper['year']}")
-        print(f"status:    {paper['status']}")
-        print(f"tags:      {paper['tags']}")
-        print(f"abstract:  {(paper['abstract'] or '')[:200]}")
-        print(f"notes:     {(paper['notes'] or '')[:200]}")
-        print(f"summary_l4: {paper['summary_l4']}")
-        print(f"pagerank:  {paper['pagerank']:.6f}")
-        print(f"url:       {paper['url']}")
-        print(f"pdf:       {paper.get('pdf_path', '')}")
+        from literature.scripts.db import get_citations
+        print(f"id:         {paper['id']}")
+        print(f"title:      {paper['title']}")
+        print(f"authors:    {paper['authors']}")
+        print(f"year:       {paper['year']}")
+        print(f"status:     {paper['status']}")
+        print(f"tags:       {paper['tags']}")
+        print(f"url:        {paper['url']}")
+        pdf = paper.get("pdf_path", "")
+        if pdf:
+            print(f"pdf:        {pdf}")
+        print(f"pagerank:   {paper['pagerank']:.6f}")
+        if paper.get("summary_l4"):
+            print(f"summary_l4: {paper['summary_l4']}")
+            print(f"  model:    {paper.get('summary_l4_model', '')}")
+        if paper.get("summary_l2"):
+            print(f"summary_l2: {paper['summary_l2']}")
+        print(f"\nabstract:\n  {paper['abstract'] or '(none)'}")
+        if paper.get("notes"):
+            print(f"\nnotes:\n  {paper['notes']}")
+        cites = get_citations(conn, args.id)
+        if cites["cites"]:
+            print(f"\ncites ({len(cites['cites'])}):")
+            for c in cites["cites"]:
+                print(f"  → {c['to_id']} [{c['type']}]")
+        if cites["cited_by"]:
+            print(f"\ncited by ({len(cites['cited_by'])}):")
+            for c in cites["cited_by"]:
+                print(f"  ← {c['from_id']} [{c['type']}]")
     return 0
 
 
@@ -140,7 +175,9 @@ def _cmd_list(args: argparse.Namespace, conn) -> int:
         for p in papers:
             year = p["year"] or "????"
             st = (p["status"] or "unread")[:8]
-            print(f"[{st:8s}] {p['id']:<40s} ({year})  {(p['title'] or '')[:60]}")
+            pdf = "📄" if p.get("pdf_path") else "  "
+            l4 = "✓" if p.get("summary_l4") else " "
+            print(f"[{st:8s}] {pdf}{l4} {p['id']:<38s} ({year})  {(p['title'] or '')[:55]}")
     return 0
 
 
@@ -251,7 +288,13 @@ def _cmd_recommend(args: argparse.Namespace, conn) -> int:
     from literature.scripts.recommend import recommend
     from literature.scripts.pagerank import update_pagerank
 
-    update_pagerank(conn)
+    citation_count = conn.execute("SELECT COUNT(*) FROM citations").fetchone()[0]
+    last_pr = conn.execute("SELECT value FROM meta WHERE key='_pagerank_edge_count'").fetchone()
+    last_count = int(last_pr["value"]) if last_pr else -1
+    if citation_count != last_count:
+        update_pagerank(conn)
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('_pagerank_edge_count', ?)", (str(citation_count),))
+        conn.commit()
 
     purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
     purpose_keywords: list[str] | None = None
@@ -323,10 +366,19 @@ def _cmd_stats(args: argparse.Namespace, conn) -> int:
     if getattr(args, "json", False):
         print(json.dumps(stats, ensure_ascii=False))
     else:
-        print(f"Total papers: {stats['total']}")
-        print(f"Citations:    {stats['citations']}")
-        print(f"Purpose set:  {stats['has_purpose']}")
-        print("By status:")
+        t = stats["total"]
+        print(f"Papers:       {t}")
+        print(f"  abstracts:  {stats['with_abstract']}/{t}")
+        print(f"  PDFs:       {stats['with_pdf']}/{t}")
+        print(f"  L4 summary: {stats['with_l4']}/{t}")
+        print(f"  L2 claims:  {stats['with_l2']}/{t}")
+        print(f"Citations:    {stats['citations']}", end="")
+        if stats.get("orphan_citations"):
+            print(f"  ({stats['orphan_citations']} orphan)")
+        else:
+            print()
+        print(f"Purpose set:  {'yes' if stats['has_purpose'] else 'no'}")
+        print("Status:")
         for st, cnt in sorted(stats["by_status"].items()):
             print(f"  {st:15s}: {cnt}")
     return 0
@@ -413,7 +465,14 @@ def _cmd_fetch_pdf(args: argparse.Namespace, conn) -> int:
 
 
 def _cmd_purpose(args: argparse.Namespace, conn) -> int:
-    text = args.text
+    text = getattr(args, "text", None)
+    if not text:
+        row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+        if row and row["value"]:
+            print(row["value"])
+        else:
+            print("No purpose set. Use: alit purpose \"your research goals here\"")
+        return 0
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('purpose', ?)", (text,))
     conn.commit()
     print(f"Purpose set ({len(text)} chars)")
@@ -529,8 +588,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("export", help="Export collection as JSON")
 
     # purpose
-    p = sub.add_parser("purpose", help="Set research purpose")
-    p.add_argument("text", help="Purpose text")
+    p = sub.add_parser("purpose", help="Set or show research purpose")
+    p.add_argument("text", nargs="?", default=None, help="Purpose text (omit to show current)")
 
     # attach
     p = sub.add_parser("attach", help="Attach a local PDF to a paper")
