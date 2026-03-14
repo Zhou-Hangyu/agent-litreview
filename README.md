@@ -42,9 +42,9 @@ alit install-skill       # teaches your agent the full workflow
 Tell alit what kind of research excites you. This drives recommendations — papers matching your taste rank higher.
 
 ```bash
-alit taste "I'm into generative models for financial markets. Love papers that combine
-transformers with market microstructure. Prefer mathematical rigor over pure empirical
-benchmarks. Especially interested in order book simulation and agent-based models."
+alit taste "I'm into multimodal foundation models and how they learn cross-modal
+representations. Love papers with clean ablations over pure benchmark chasing.
+Especially interested in vision-language grounding and embodied AI."
 ```
 
 Change it anytime as your interests evolve. The reading queue reranks instantly.

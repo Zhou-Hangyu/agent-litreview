@@ -304,10 +304,10 @@ def test_export_json(tmp_path):
 
 def test_taste(db):
     db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('taste', ?)",
-               ("Research on limit order book simulation and market microstructure",))
+               ("Research on multimodal foundation models and vision-language grounding",))
     db.commit()
     row = db.execute("SELECT value FROM meta WHERE key='taste'").fetchone()
-    assert "limit order book" in row["value"]
+    assert "multimodal" in row["value"]
 
 
 def test_cli_help(tmp_path):
@@ -385,11 +385,11 @@ def test_url_auto_detect():
 
 
 def test_recommend_with_taste_keywords(db):
-    add_paper(db, "p1", "Limit Order Book Simulation", year=2024,
-              abstract="LOB simulation using diffusion models", status="unread")
+    add_paper(db, "p1", "Vision-Language Grounding with Transformers", year=2024,
+              abstract="Multimodal grounding using cross-attention", status="unread")
     add_paper(db, "p2", "Cat Classification", year=2024,
               abstract="Deep learning for cat photos", status="unread")
-    results = recommend(db, top_k=10, taste_keywords=["limit", "order", "book", "simulation"])
+    results = recommend(db, top_k=10, taste_keywords=["vision", "language", "grounding", "multimodal"])
     assert results[0]["id"] == "p1"
     assert results[0]["breakdown"]["relevance"] > results[1]["breakdown"]["relevance"]
 
@@ -434,10 +434,10 @@ def test_import_file(tmp_path):
 def test_auto_tag(db):
     from alit.scripts.db import _auto_tag_from_abstract
     tags = _auto_tag_from_abstract(
-        "This paper introduces a transformer-based attention mechanism for financial market simulation"
+        "This paper introduces a transformer-based attention mechanism for image classification and simulation"
     )
     assert "transformer" in tags
-    assert "finance" in tags
+    assert "computer-vision" in tags
     assert "simulation" in tags
 
 
