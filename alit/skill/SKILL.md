@@ -39,10 +39,11 @@ Data lives in `.alit/papers.db`. PDFs in `.alit/pdfs/`. Zero external dependenci
 
 ## Citations
 
-1. Run `alit cite <from_id> <to_id> --type extends` to add a citation edge. Types: cites, extends, contradicts, uses_method, uses_dataset, surveys.
-2. The cited paper does not need to exist in the database yet.
-3. Run `alit orphans` to list cited papers not in the collection.
-4. For each orphan, search online to verify the paper exists, then `alit add` it.
+1. Run `alit auto-cite` to automatically extract arXiv references from downloaded PDFs and build citation edges. This is the fastest way to build the citation graph.
+2. Run `alit cite <from_id> <to_id> --type extends` to manually add a citation edge. Types: cites, extends, contradicts, uses_method, uses_dataset, surveys.
+3. The cited paper does not need to exist in the database yet.
+4. Run `alit orphans` to list cited papers not in the collection.
+5. For each orphan, search online to verify the paper exists, then `alit add` it.
 
 ## Search and Synthesis
 
@@ -72,6 +73,7 @@ Data lives in `.alit/papers.db`. PDFs in `.alit/pdfs/`. Zero external dependenci
 | `alit note <id> <text>` | Append notes |
 | `alit summarize <id>` | Store L4/L2 summary with `--model` provenance |
 | `alit cite <from> <to>` | Add citation edge with `--type` |
+| `alit auto-cite` | Extract citations from PDFs automatically |
 | `alit status <id> <s>` | Set status: unread, skimmed, read, synthesized |
 | `alit tag <id> <tags>` | Set comma-separated tags |
 | `alit taste [text]` | Set or show research taste |

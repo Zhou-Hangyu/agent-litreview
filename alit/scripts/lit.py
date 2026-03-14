@@ -21,7 +21,7 @@ import urllib.parse
 from pathlib import Path
 
 from alit.scripts.db import DB_NAME, add_citation, add_paper, attach_pdf
-from alit.scripts.db import delete_paper, enrich_papers
+from alit.scripts.db import auto_cite_from_pdfs, delete_paper, enrich_papers
 from alit.scripts.db import fetch_pdf_for_paper, get_db
 from alit.scripts.db import get_orphan_citations, get_paper, get_stats
 from alit.scripts.db import init_db, list_papers, update_paper
@@ -389,18 +389,22 @@ def _cmd_recommend(args: argparse.Namespace, conn) -> int:
         print("(xox) No recommendations. All papers read or corpus empty.")
         return 0
 
-    verbose = getattr(args, "verbose", False)
+    taste_text = taste_row["value"] if taste_row and taste_row["value"] else ""
+    compact = getattr(args, "compact", False)
+
+    if taste_text and not compact:
+        print(f"Taste: {taste_text[:150]}")
+        print()
 
     for rank, r in enumerate(results, start=1):
         year = r.get("year") or "????"
         score = r.get("score", 0)
         pdf = "📄" if r.get("pdf_path") else "  "
         print(f"  {rank:2d}. [{score:.3f}] {pdf} {r['id']:<38s} ({year}) {(r.get('title') or '')[:50]}")
-        if verbose:
-            bd = r.get("breakdown", {})
-            parts = [f"{k}={v:.2f}" for k, v in bd.items() if v > 0]
-            if parts:
-                print(f"              {' | '.join(parts)}")
+        if not compact:
+            abstract = (r.get("abstract") or "")[:150]
+            if abstract:
+                print(f"      {abstract}")
 
     return 0
 
@@ -554,6 +558,16 @@ def _cmd_fetch_pdf(args: argparse.Namespace, conn) -> int:
         print(f"Downloaded: {pdf}")
     else:
         print(f"No PDF available for {paper_id} (needs --arxiv or --url ending in .pdf)")
+    return 0
+
+
+def _cmd_auto_cite(args: argparse.Namespace, conn) -> int:
+    db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
+    result = auto_cite_from_pdfs(conn, db_path)
+    if result["edges_added"]:
+        print(f"(-o+) Scanned {result['scanned']} PDFs, added {result['edges_added']} citation edges")
+    else:
+        print(f"(-o-) Scanned {result['scanned']} PDFs, no new citations found")
     return 0
 
 
@@ -1055,6 +1069,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="Paper ID")
     p.add_argument("new_status", help="New status (unread/skimmed/read/synthesized)")
 
+    # auto-cite
+    sub.add_parser("auto-cite", help="Extract citations from PDFs and build citation graph")
+
     # tag
     p = sub.add_parser("tag", help="Set tags on a paper")
     p.add_argument("id", help="Paper ID")
@@ -1068,7 +1085,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # recommend
     p = sub.add_parser("recommend", help="Reading recommendations")
     p.add_argument("n", nargs="?", default=None, help="Number of results (default: 10)")
-    p.add_argument("--verbose", "-v", action="store_true", help="Show score breakdown")
+    p.add_argument("--compact", "-c", action="store_true", help="IDs and titles only, no abstracts")
 
     # ask
     p = sub.add_parser("ask", help="Cross-paper synthesis")
@@ -1151,6 +1168,7 @@ HANDLERS = {
     "export": _cmd_export,
     "taste": _cmd_taste,
     "sync": _cmd_sync,
+    "auto-cite": _cmd_auto_cite,
     "fetch-pdf": _cmd_fetch_pdf,
     "attach": _cmd_attach,
     "orphans": _cmd_orphans,

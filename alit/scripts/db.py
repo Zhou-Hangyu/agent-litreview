@@ -484,6 +484,63 @@ def fetch_pdf_for_paper(
     return None
 
 
+def extract_references_from_pdf(pdf_path: Path) -> list[str]:
+    """Extract arXiv IDs from a PDF's text. Returns list of arXiv ID strings."""
+    try:
+        raw = pdf_path.read_bytes()
+        text_chunks = re.findall(rb"[\x20-\x7E]{20,}", raw)
+        text = b" ".join(text_chunks).decode("ascii", errors="ignore")
+    except Exception:
+        return []
+
+    arxiv_ids = set(re.findall(r"(?:arXiv:?\s*)?(\d{4}\.\d{4,5})(?:v\d+)?", text))
+    return sorted(arxiv_ids)
+
+
+def auto_cite_from_pdfs(conn: sqlite3.Connection, db_path: Path) -> dict:
+    """Scan all PDFs, extract arXiv references, create citation edges automatically."""
+    papers = conn.execute(
+        "SELECT id, arxiv_id, pdf_path FROM papers WHERE pdf_path != '' AND pdf_path IS NOT NULL"
+    ).fetchall()
+
+    known_arxiv = {}
+    for r in conn.execute("SELECT id, arxiv_id FROM papers WHERE arxiv_id != ''").fetchall():
+        known_arxiv[r["arxiv_id"]] = r["id"]
+
+    edges_added = 0
+    papers_scanned = 0
+
+    for paper in papers:
+        pdf_file = db_path / LIT_DIR / paper["pdf_path"]
+        if not pdf_file.exists():
+            continue
+
+        own_arxiv = _clean_arxiv_id(paper["arxiv_id"] or "")
+        refs = extract_references_from_pdf(pdf_file)
+        papers_scanned += 1
+
+        for ref_arxiv in refs:
+            if ref_arxiv == own_arxiv:
+                continue
+            target_id = known_arxiv.get(ref_arxiv)
+            if not target_id:
+                continue
+            existing = conn.execute(
+                "SELECT 1 FROM citations WHERE from_id = ? AND to_id = ?",
+                (paper["id"], target_id),
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT INTO citations (from_id, to_id, type) VALUES (?, ?, 'cites')",
+                    (paper["id"], target_id),
+                )
+                edges_added += 1
+
+    if edges_added:
+        conn.commit()
+    return {"scanned": papers_scanned, "edges_added": edges_added}
+
+
 _VALID_PAPER_FIELDS = frozenset({
     "id", "title", "authors", "year", "abstract", "url", "arxiv_id", "doi",
     "tags", "status", "notes", "summary_l4", "summary_l4_model", "summary_l4_at",
