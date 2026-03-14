@@ -1,0 +1,11 @@
+{
+  "data": [
+    {
+      "citingPaper": {
+        "paperId": "abc123def456abc123def456abc123def456abc12",
+        "title": "Citing Paper"
+      }
+    }
+  ],
+  "next": 1
+}

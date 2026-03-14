@@ -1,0 +1,9 @@
+index/papers.db
+index/papers.db-wal
+index/papers.db-shm
+output/review.tex
+output/review.aux
+output/review.bbl
+output/review.blg
+output/review.log
+output/review.pdf

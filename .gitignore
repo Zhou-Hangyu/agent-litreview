@@ -1,0 +1,10 @@
+__pycache__/
+*.py[oc]
+build/
+dist/
+*.egg-info/
+.venv/
+.env
+literature/index/papers.db
+literature/index/papers.db-*
+literature/output/

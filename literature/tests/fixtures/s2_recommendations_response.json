@@ -1,0 +1,13 @@
+{
+  "recommendedPapers": [
+    {
+      "paperId": "abc123def456abc123def456abc123def456abc12",
+      "title": "Test Recommended Paper",
+      "year": 2020,
+      "citationCount": 100,
+      "externalIds": {
+        "ArXiv": "1234.5678"
+      }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+  "title": "Attention Is All You Need",
+  "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks that include an encoder and a decoder. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.",
+  "authors": [
+    {"authorId": "1", "name": "Ashish Vaswani"},
+    {"authorId": "2", "name": "Noam Shazeer"},
+    {"authorId": "3", "name": "Niki Parmar"},
+    {"authorId": "4", "name": "Jakob Uszkoreit"},
+    {"authorId": "5", "name": "Llion Jones"},
+    {"authorId": "6", "name": "Aidan N. Gomez"},
+    {"authorId": "7", "name": "Lukasz Kaiser"},
+    {"authorId": "8", "name": "Illia Polosukhin"}
+  ],
+  "year": 2017,
+  "venue": "NeurIPS",
+  "publicationVenue": {"name": "Neural Information Processing Systems"},
+  "citationCount": 50000,
+  "influentialCitationCount": 1000,
+  "referenceCount": 35,
+  "fieldsOfStudy": ["Computer Science"],
+  "s2FieldsOfStudy": [
+    {"category": "Computer Science", "source": "external"},
+    {"category": "Machine Learning", "source": "s2-fos-model"}
+  ],
+  "externalIds": {
+    "ArXiv": "1706.03762",
+    "DOI": "10.48550/arXiv.1706.03762",
+    "MAG": "2963403868",
+    "DBLP": "journals/corr/VaswaniSPUJGKP17"
+  },
+  "tldr": {
+    "model": "tldr@v2.0.0",
+    "text": "A new architecture for sequence transduction based entirely on attention mechanisms, dispensing with recurrence and convolutions, which achieves state-of-the-art results on machine translation tasks."
+  },
+  "openAccessPdf": {
+    "url": "https://arxiv.org/pdf/1706.03762.pdf",
+    "status": "GREEN"
+  },
+  "publicationDate": "2017-06-12"
+}
