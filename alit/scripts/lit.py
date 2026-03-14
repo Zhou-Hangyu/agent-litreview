@@ -551,6 +551,29 @@ def _cmd_fetch_pdf(args: argparse.Namespace, conn) -> int:
     return 0
 
 
+def _cmd_sync(args: argparse.Namespace, conn) -> int:
+    source = getattr(args, "source", None)
+    if source:
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('sync_source', ?)", (source,))
+        conn.commit()
+        print(f"(-o+) Sync source set: {source}")
+        return 0
+
+    row = conn.execute("SELECT value FROM meta WHERE key='sync_source'").fetchone()
+    if not row or not row["value"]:
+        print("(xox) No sync source set. Use: alit sync --source /path/to/library.bib", file=sys.stderr)
+        return 1
+
+    bib_path = Path(row["value"])
+    if not bib_path.exists():
+        print(f"(xox) Sync source not found: {bib_path}", file=sys.stderr)
+        return 1
+
+    args.file = str(bib_path)
+    args.bib = True
+    return _cmd_import(args, conn)
+
+
 def _cmd_taste(args: argparse.Namespace, conn) -> int:
     text = getattr(args, "text", None)
     if not text:
@@ -1021,6 +1044,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="Paper ID")
     p.add_argument("tags", help="Comma-separated tags")
 
+    # sync
+    p = sub.add_parser("sync", help="Import from a remembered BibTeX source")
+    p.add_argument("--source", default=None, help="Set the .bib file path (remembered for future runs)")
+    p.add_argument("--no-pdf", action="store_true", help="Skip PDF downloads")
+
     # recommend
     p = sub.add_parser("recommend", help="Reading recommendations")
     p.add_argument("n", nargs="?", default=None, help="Number of results (default: 10)")
@@ -1106,6 +1134,7 @@ HANDLERS = {
     "delete": _cmd_delete,
     "export": _cmd_export,
     "taste": _cmd_taste,
+    "sync": _cmd_sync,
     "fetch-pdf": _cmd_fetch_pdf,
     "attach": _cmd_attach,
     "orphans": _cmd_orphans,

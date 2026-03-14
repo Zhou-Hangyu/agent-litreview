@@ -69,6 +69,7 @@ alit install-skill
 | `alit add <title-or-url>` | Add paper (auto-enriches arXiv, auto-tags) |
 | `alit find <query>` | Search arXiv/S2 for papers by topic |
 | `alit import <file>` | Bulk-add from URL file or BibTeX (.bib) |
+| `alit sync` | Import from remembered BibTeX source (Zotero, etc.) |
 | `alit enrich` | Batch-fetch metadata for papers missing abstracts |
 | `alit search <query>` | BM25 full-text search |
 | `alit recommend [N]` | Reading queue ranked by score |

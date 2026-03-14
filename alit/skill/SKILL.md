@@ -21,8 +21,9 @@ Data lives in `.alit/papers.db`. PDFs in `.alit/pdfs/`. Zero external dependenci
 4. To bulk-add from a file of arXiv URLs (one per line, `#` comments), run `alit import papers.txt`.
 5. To import from Zotero/Mendeley/Google Scholar, export as `.bib` and run `alit import library.bib`.
 6. To search for papers by topic, run `alit find "query"` or `alit find "query" --source s2`.
-7. To fetch metadata for papers missing abstracts, run `alit enrich`.
-8. Skip PDF downloads on any command with `--no-pdf`.
+7. To set up recurring BibTeX sync (e.g. from Zotero), run `alit sync --source /path/to/library.bib` once, then `alit sync` anytime to pull new papers.
+8. To fetch metadata for papers missing abstracts, run `alit enrich`.
+9. Skip PDF downloads on any command with `--no-pdf`.
 
 ## Reading Workflow
 
@@ -60,6 +61,7 @@ Data lives in `.alit/papers.db`. PDFs in `.alit/pdfs/`. Zero external dependenci
 | `alit add <title-or-url>` | Add paper (auto-enriches arXiv, auto-tags) |
 | `alit find <query>` | Search arXiv/S2 for papers by topic |
 | `alit import <file>` | Bulk-add from URL file or BibTeX |
+| `alit sync` | Import from remembered BibTeX source (Zotero, etc.) |
 | `alit enrich` | Batch-fetch metadata for papers missing abstracts |
 | `alit search <query>` | BM25 full-text search |
 | `alit recommend [N]` | Reading queue ranked by score |
