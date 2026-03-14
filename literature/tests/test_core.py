@@ -429,3 +429,205 @@ def test_import_file(tmp_path):
     papers = list_papers(conn)
     assert len(papers) >= 1
     conn.close()
+
+
+def test_auto_tag(db):
+    from literature.scripts.db import _auto_tag_from_abstract
+    tags = _auto_tag_from_abstract(
+        "This paper introduces a transformer-based attention mechanism for financial market simulation"
+    )
+    assert "transformer" in tags
+    assert "finance" in tags
+    assert "simulation" in tags
+
+
+def test_auto_tag_empty(db):
+    from literature.scripts.db import _auto_tag_from_abstract
+    tags = _auto_tag_from_abstract("")
+    assert tags == []
+
+
+def test_auto_tag_title_only(db):
+    from literature.scripts.db import _auto_tag_from_abstract
+    tags = _auto_tag_from_abstract("", "Survey of large language models")
+    assert "survey" in tags
+    assert "foundation-model" in tags
+
+
+def test_auto_tag_max_8(db):
+    from literature.scripts.db import _auto_tag_from_abstract
+    text = ("transformer attention self-attention diffusion model denoising reinforcement learning "
+            "natural language image classification graph neural optimization survey")
+    tags = _auto_tag_from_abstract(text)
+    assert len(tags) <= 8
+
+
+def test_parse_bibtex(db):
+    from literature.scripts.db import _parse_bibtex
+    bib = """
+@article{vaswani2017attention,
+  title={Attention Is All You Need},
+  author={Vaswani, Ashish and Shazeer, Noam},
+  year={2017},
+  journal={NeurIPS},
+  abstract={The dominant sequence transduction models}
+}
+"""
+    entries = _parse_bibtex(bib)
+    assert len(entries) == 1
+    assert entries[0]["_citekey"] == "vaswani2017attention"
+    assert entries[0]["title"] == "Attention Is All You Need"
+    assert entries[0]["year"] == "2017"
+    assert entries[0]["author"] == "Vaswani, Ashish and Shazeer, Noam"
+
+
+def test_parse_bibtex_multiple(db):
+    from literature.scripts.db import _parse_bibtex
+    bib = """
+@article{paper1,
+  title={First Paper},
+  year={2020}
+}
+
+@inproceedings{paper2,
+  title={Second Paper},
+  year={2021}
+}
+"""
+    entries = _parse_bibtex(bib)
+    assert len(entries) == 2
+
+
+def test_parse_bibtex_empty():
+    from literature.scripts.db import _parse_bibtex
+    assert _parse_bibtex("") == []
+    assert _parse_bibtex("no bibtex here") == []
+
+
+def test_progress_command(db):
+    add_paper(db, "p1", "Paper One", year=2024, status="read")
+    add_paper(db, "p2", "Paper Two", year=2024, status="unread")
+    stats = get_stats(db)
+    assert stats["total"] == 2
+    assert stats["by_status"]["read"] == 1
+    assert stats["by_status"]["unread"] == 1
+
+
+def test_progress_cli(tmp_path):
+    import io
+    from unittest.mock import patch
+    from literature.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Paper One", year=2021, status="read")
+    add_paper(conn, "p2", "Paper Two", year=2022, status="unread")
+    conn.close()
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["progress"], root=tmp_path)
+    assert code == 0
+    text = output.getvalue()
+    assert "Literature Review Progress" in text
+    assert "2" in text
+
+
+def test_export_markdown(tmp_path):
+    import io
+    from unittest.mock import patch
+    from literature.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Paper One", year=2021, status="read",
+              summary_l4="This is a summary", tags="ml,nlp")
+    add_paper(conn, "p2", "Paper Two", year=2022, status="unread")
+    conn.close()
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["export", "--format", "markdown"], root=tmp_path)
+    assert code == 0
+    md = output.getvalue()
+    assert "# Literature Review" in md
+    assert "Paper One" in md
+    assert "This is a summary" in md
+
+
+def test_read_command(tmp_path):
+    import io
+    from unittest.mock import patch
+    from literature.scripts.lit import _cmd_read
+    import argparse
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Test Paper", year=2024, abstract="Some abstract text",
+              authors="Smith, Jones")
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        args = argparse.Namespace(id="p1", json=False)
+        code = _cmd_read(args, conn)
+    assert code == 0
+    text = output.getvalue()
+    assert "Test Paper" in text
+    assert "Smith, Jones" in text
+    conn.close()
+
+
+def test_read_not_found(tmp_path):
+    import io
+    from unittest.mock import patch
+    from literature.scripts.lit import _cmd_read
+    import argparse
+
+    conn = init_db(tmp_path)
+
+    with patch("sys.stderr", io.StringIO()):
+        args = argparse.Namespace(id="nonexistent", json=False)
+        code = _cmd_read(args, conn)
+    assert code == 1
+    conn.close()
+
+
+def test_import_bib(tmp_path):
+    from literature.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    conn.close()
+
+    bib_file = tmp_path / "refs.bib"
+    bib_file.write_text("""
+@article{smith2020paper,
+  title={A Test Paper on Neural Networks},
+  author={Smith, John and Doe, Jane},
+  year={2020},
+  abstract={Neural networks are powerful models for sequence modeling.}
+}
+""")
+    code = run(["import", str(bib_file), "--no-pdf"], root=tmp_path)
+    assert code == 0
+
+    conn = init_db(tmp_path)
+    paper = get_paper(conn, "smith2020paper")
+    assert paper is not None
+    assert paper["title"] == "A Test Paper on Neural Networks"
+    assert paper["authors"] == "Smith, John and Doe, Jane"
+    assert paper["year"] == 2020
+    conn.close()
+
+
+def test_export_json_format(tmp_path):
+    from literature.scripts.lit import run
+    import io
+    from unittest.mock import patch
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Paper One", year=2021)
+    conn.close()
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["export", "--format", "json"], root=tmp_path)
+    assert code == 0
+    data = json.loads(output.getvalue())
+    assert len(data["papers"]) == 1

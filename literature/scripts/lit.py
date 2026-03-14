@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.parse
 from pathlib import Path
 
 from literature.scripts.db import DB_NAME, add_citation, add_paper, attach_pdf
@@ -134,6 +135,13 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
 
     paper = add_paper(conn, paper_id, title, **kwargs)
 
+    if not kwargs.get("tags") and paper and paper.get("abstract"):
+        from literature.scripts.db import _auto_tag_from_abstract
+        auto_tags = _auto_tag_from_abstract(paper["abstract"], paper["title"])
+        if auto_tags:
+            update_paper(conn, paper_id, tags=",".join(auto_tags))
+            paper = get_paper(conn, paper_id)
+
     db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
     local_pdf = getattr(args, "pdf", None)
     no_pdf = getattr(args, "no_pdf", False)
@@ -153,7 +161,7 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
     if getattr(args, "json", False):
         print(json.dumps(paper, ensure_ascii=False))
     else:
-        pdf_msg = f" | pdf: {paper.get('pdf_path')}" if paper.get("pdf_path") else ""
+        pdf_msg = f" | pdf: {paper.get('pdf_path')}" if paper and paper.get("pdf_path") else ""
         print(f"Added: {paper_id}{pdf_msg}")
     return 0
 
@@ -437,16 +445,53 @@ def _cmd_delete(args: argparse.Namespace, conn) -> int:
 
 
 def _cmd_export(args: argparse.Namespace, conn) -> int:
-    papers = [dict(r) for r in conn.execute("SELECT * FROM papers ORDER BY year DESC").fetchall()]
-    citations = [dict(r) for r in conn.execute("SELECT * FROM citations").fetchall()]
-    purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
-    data = {
-        "papers": papers,
-        "citations": citations,
-        "purpose": purpose_row["value"] if purpose_row else "",
-    }
-    print(json.dumps(data, indent=2, ensure_ascii=False))
-    return 0
+    fmt = getattr(args, "format", "json") or "json"
+
+    if fmt == "json":
+        papers = [dict(r) for r in conn.execute("SELECT * FROM papers ORDER BY year DESC").fetchall()]
+        citations = [dict(r) for r in conn.execute("SELECT * FROM citations").fetchall()]
+        purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+        data = {
+            "papers": papers,
+            "citations": citations,
+            "purpose": purpose_row["value"] if purpose_row else "",
+        }
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return 0
+
+    if fmt == "markdown":
+        purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+        papers = [dict(r) for r in conn.execute("SELECT * FROM papers ORDER BY year DESC").fetchall()]
+        stats = get_stats(conn)
+
+        lines = ["# Literature Review", ""]
+        if purpose_row and purpose_row["value"]:
+            lines.append(f"> {purpose_row['value'][:200]}")
+            lines.append("")
+        lines.append(f"**{stats['total']} papers** | {stats.get('with_l4', 0)} summarized | {stats['citations']} citations\n")
+
+        for status in ("synthesized", "read", "skimmed", "unread"):
+            group = [p for p in papers if p["status"] == status]
+            if not group:
+                continue
+            lines.append(f"## {status.title()} ({len(group)})\n")
+            for p in group:
+                year = p["year"] or "?"
+                line = f"- **{p['title']}** ({year})"
+                if p.get("authors"):
+                    line += f" — {p['authors'][:50]}"
+                lines.append(line)
+                if p.get("summary_l4"):
+                    lines.append(f"  > {p['summary_l4']}")
+                if p.get("tags"):
+                    lines.append(f"  Tags: {p['tags']}")
+                lines.append("")
+
+        print("\n".join(lines))
+        return 0
+
+    print(f"Unknown format: {fmt}. Use --format json or --format markdown", file=sys.stderr)
+    return 1
 
 
 def _cmd_attach(args: argparse.Namespace, conn) -> int:
@@ -521,12 +566,83 @@ def _cmd_purpose(args: argparse.Namespace, conn) -> int:
     return 0
 
 
+def _import_bibtex(args: argparse.Namespace, conn, file_path: Path) -> int:
+    import re as _re
+    from literature.scripts.db import _parse_bibtex, _auto_tag_from_abstract, _sanitize_id
+
+    text = file_path.read_text(encoding="utf-8", errors="replace")
+    entries = _parse_bibtex(text)
+    if not entries:
+        print("No BibTeX entries found.")
+        return 0
+
+    db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
+    no_pdf = getattr(args, "no_pdf", False)
+    added, skipped = 0, 0
+
+    for entry in entries:
+        paper_id = _sanitize_id(entry.get("_citekey", ""))
+        if not paper_id or get_paper(conn, paper_id):
+            skipped += 1
+            continue
+
+        title = entry.get("title", "Untitled")
+        kwargs: dict = {}
+        if entry.get("year"):
+            try:
+                kwargs["year"] = int(entry["year"])
+            except ValueError:
+                pass
+        if entry.get("author"):
+            kwargs["authors"] = entry["author"]
+        if entry.get("abstract"):
+            kwargs["abstract"] = entry["abstract"]
+        if entry.get("doi"):
+            kwargs["doi"] = entry["doi"]
+        if entry.get("url"):
+            kwargs["url"] = entry["url"]
+
+        arxiv_id = entry.get("eprint", "")
+        if not arxiv_id:
+            url_val = entry.get("url", "")
+            m = _re.search(r"(\d{4}\.\d{4,5})", url_val)
+            if m:
+                arxiv_id = m.group(1)
+        if arxiv_id:
+            kwargs["arxiv_id"] = arxiv_id
+
+        auto_tags = _auto_tag_from_abstract(kwargs.get("abstract", ""), title)
+        if auto_tags:
+            kwargs["tags"] = ",".join(auto_tags)
+
+        add_paper(conn, paper_id, title, **kwargs)
+
+        if arxiv_id and not kwargs.get("abstract"):
+            from literature.scripts.db import _enrich_one_arxiv, _enrich_one_s2
+            enriched = _enrich_one_arxiv(arxiv_id) or _enrich_one_s2(arxiv_id)
+            if enriched:
+                update_paper(conn, paper_id, **{k: v for k, v in enriched.items() if k != "title" and v})
+
+        if not no_pdf and arxiv_id:
+            fetch_pdf_for_paper(conn, paper_id, db_path)
+
+        added += 1
+        print(f"  {paper_id}: {title[:60]}", flush=True)
+
+    print(f"\nImported {added} from BibTeX, skipped {skipped} existing", flush=True)
+    return 0
+
+
 def _cmd_import(args: argparse.Namespace, conn) -> int:
     import time
     file_path = Path(args.file)
     if not file_path.exists():
         print(f"File not found: {file_path}", file=sys.stderr)
         return 1
+
+    is_bib = getattr(args, "bib", False) or file_path.suffix in (".bib", ".bibtex")
+    if is_bib:
+        return _import_bibtex(args, conn, file_path)
 
     db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
     no_pdf = getattr(args, "no_pdf", False)
@@ -568,6 +684,199 @@ def _cmd_import(args: argparse.Namespace, conn) -> int:
     print(f"\nImported {added}, skipped {skipped} existing, {len(errors)} errors", flush=True)
     for e in errors:
         print(f"  {e}")
+    return 0
+
+
+def _cmd_find(args: argparse.Namespace, conn) -> int:
+    import xml.etree.ElementTree as ET
+    import urllib.request
+    import re as _re
+    from urllib.parse import quote as _quote
+
+    query = args.query
+    source = getattr(args, "source", "arxiv") or "arxiv"
+    limit = getattr(args, "limit", 10) or 10
+
+    if source == "arxiv":
+        encoded = _quote(query)
+        url = f"https://export.arxiv.org/api/query?search_query=all:{encoded}&start=0&max_results={limit}&sortBy=relevance"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "alit/0.2"})
+            resp = urllib.request.urlopen(req, timeout=30)
+            xml_data = resp.read().decode("utf-8")
+        except Exception as e:
+            print(f"Search failed: {e}", file=sys.stderr)
+            return 1
+
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        root = ET.fromstring(xml_data)
+        entries = root.findall("atom:entry", ns)
+
+        if not entries:
+            print("No results found.")
+            return 0
+
+        results = []
+        for entry in entries:
+            title_el = entry.find("atom:title", ns)
+            title = " ".join(title_el.text.strip().split()) if title_el is not None and title_el.text else ""
+            if "Error" in title:
+                continue
+            summary_el = entry.find("atom:summary", ns)
+            abstract = " ".join(summary_el.text.strip().split()) if summary_el is not None and summary_el.text else ""
+            pub_el = entry.find("atom:published", ns)
+            year = int(pub_el.text[:4]) if pub_el is not None and pub_el.text else None
+            id_el = entry.find("atom:id", ns)
+            entry_url = (id_el.text or "") if id_el is not None else ""
+            arxiv_match = _re.search(r"(\d{4}\.\d{4,5})", entry_url)
+            arxiv_id = arxiv_match.group(1) if arxiv_match else ""
+            author_names = []
+            for a in entry.findall("atom:author", ns):
+                name_el = a.find("atom:name", ns)
+                if name_el is not None and name_el.text:
+                    author_names.append(name_el.text)
+
+            existing = None
+            if arxiv_id:
+                existing = conn.execute("SELECT id FROM papers WHERE arxiv_id = ?", (arxiv_id,)).fetchone()
+
+            results.append({
+                "arxiv_id": arxiv_id, "title": title, "year": year,
+                "authors": ", ".join(author_names[:3]) + ("..." if len(author_names) > 3 else ""),
+                "abstract": abstract[:150], "url": entry_url,
+                "in_db": existing is not None,
+            })
+
+        if getattr(args, "json", False):
+            print(json.dumps(results, ensure_ascii=False))
+        else:
+            for i, r in enumerate(results, 1):
+                marker = " ✓" if r["in_db"] else ""
+                print(f"  {i:2d}. [{r['year'] or '????'}] {r['title'][:70]}{marker}")
+                print(f"      arxiv:{r['arxiv_id']}  {r['authors']}")
+            print(f"\nTo add: alit add \"https://arxiv.org/abs/<arxiv_id>\"")
+    else:
+        from literature.scripts.db import _fetch_url
+        encoded = _quote(query)
+        url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={encoded}&limit={limit}&fields=title,abstract,year,authors,externalIds,url"
+        try:
+            data = json.loads(_fetch_url(url).decode("utf-8"))
+        except Exception as e:
+            print(f"Search failed: {e}", file=sys.stderr)
+            return 1
+
+        papers = data.get("data", [])
+        if not papers:
+            print("No results found.")
+            return 0
+
+        if getattr(args, "json", False):
+            print(json.dumps(papers, ensure_ascii=False))
+        else:
+            for i, p in enumerate(papers, 1):
+                ext = p.get("externalIds") or {}
+                arxiv_id = ext.get("ArXiv", "")
+                year = p.get("year") or "????"
+                title = (p.get("title") or "")[:70]
+                print(f"  {i:2d}. [{year}] {title}")
+                if arxiv_id:
+                    print(f"      arxiv:{arxiv_id}")
+            print(f"\nTo add: alit add \"https://arxiv.org/abs/<arxiv_id>\"")
+    return 0
+
+
+def _cmd_read(args: argparse.Namespace, conn) -> int:
+    from literature.scripts.db import get_citations
+    paper = get_paper(conn, args.id)
+    if paper is None:
+        print(f"Paper not found: {args.id}", file=sys.stderr)
+        return 1
+
+    print(f"{'='*70}")
+    print(f"  {paper['title']}")
+    print(f"  {paper['authors']} ({paper['year'] or '?'})")
+    print(f"  Status: {paper['status']}  |  ID: {paper['id']}")
+    pdf = paper.get("pdf_path", "")
+    if pdf:
+        print(f"  PDF: .alit/{pdf}")
+    print(f"{'='*70}")
+
+    if paper.get("abstract"):
+        print(f"\nAbstract:\n{paper['abstract']}\n")
+    else:
+        print("\n(No abstract available. Run: alit enrich)\n")
+
+    if paper.get("summary_l4"):
+        print(f"Summary (L4): {paper['summary_l4']}")
+        print(f"  — by {paper.get('summary_l4_model', '?')} at {paper.get('summary_l4_at', '?')}")
+
+    if paper.get("summary_l2"):
+        print(f"\nKey Claims (L2): {paper['summary_l2']}")
+
+    if paper.get("notes"):
+        print(f"\nNotes:\n{paper['notes']}")
+
+    cites = get_citations(conn, args.id)
+    if cites["cites"]:
+        print(f"\nCites ({len(cites['cites'])}):")
+        for c in cites["cites"]:
+            cited = get_paper(conn, c["to_id"])
+            label = f"{cited['title'][:50]}" if cited else f"{c['to_id']} (not in collection)"
+            print(f"  → [{c['type']}] {label}")
+    if cites["cited_by"]:
+        print(f"\nCited by ({len(cites['cited_by'])}):")
+        for c in cites["cited_by"]:
+            citer = get_paper(conn, c["from_id"])
+            label = f"{citer['title'][:50]}" if citer else c["from_id"]
+            print(f"  ← [{c['type']}] {label}")
+
+    print(f"\n{'─'*70}")
+    print(f"After reading, run:")
+    print(f"  alit status {args.id} read")
+    print(f"  alit note {args.id} \"Your observations...\"")
+    print(f"  alit summarize {args.id} --l4 \"One sentence summary\" --model \"your-model\"")
+    return 0
+
+
+def _cmd_progress(args: argparse.Namespace, conn) -> int:
+    stats = get_stats(conn)
+    total = stats["total"]
+    if total == 0:
+        print("No papers yet. Run: alit add \"https://arxiv.org/abs/...\"")
+        return 0
+
+    if getattr(args, "json", False):
+        print(json.dumps(stats, ensure_ascii=False))
+        return 0
+
+    by_status = stats.get("by_status", {})
+    read_count = by_status.get("read", 0) + by_status.get("synthesized", 0)
+    skimmed = by_status.get("skimmed", 0)
+    unread = by_status.get("unread", 0)
+
+    def bar(done: int, tot: int, width: int = 30) -> str:
+        if tot == 0:
+            return "[" + " " * width + "]"
+        filled = int(width * done / tot)
+        return "[" + "█" * filled + "░" * (width - filled) + "]"
+
+    print(f"Literature Review Progress\n")
+    print(f"  Papers:     {bar(total, total)} {total}")
+    print(f"  Read:       {bar(read_count, total)} {read_count}/{total}")
+    print(f"  Skimmed:    {bar(skimmed, total)} {skimmed}/{total}")
+    print(f"  Unread:     {bar(unread, total)} {unread}/{total}")
+    print(f"  Abstracts:  {bar(stats['with_abstract'], total)} {stats['with_abstract']}/{total}")
+    print(f"  PDFs:       {bar(stats['with_pdf'], total)} {stats['with_pdf']}/{total}")
+    print(f"  Summarized: {bar(stats['with_l4'], total)} {stats['with_l4']}/{total}")
+    print(f"  Citations:  {stats['citations']}", end="")
+    if stats.get("orphan_citations"):
+        print(f" ({stats['orphan_citations']} orphan)")
+    else:
+        print()
+    if stats.get("has_purpose"):
+        print(f"  Purpose:    ✓ set")
+    else:
+        print(f"  Purpose:    ✗ not set (run: alit purpose \"your goals\")")
     return 0
 
 
@@ -676,9 +985,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("delete", help="Remove a paper")
     p.add_argument("id", help="Paper ID")
 
-    # export
-    sub.add_parser("export", help="Export collection as JSON")
-
     # purpose
     p = sub.add_parser("purpose", help="Set or show research purpose")
     p.add_argument("text", nargs="?", default=None, help="Purpose text (omit to show current)")
@@ -700,9 +1006,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", help="Paper ID")
 
     # import
-    p = sub.add_parser("import", help="Bulk-add papers from a file of arXiv URLs")
-    p.add_argument("file", help="Text file with one arXiv URL per line (# comments ignored)")
+    p = sub.add_parser("import", help="Bulk-add papers from URL file or BibTeX")
+    p.add_argument("file", help="Text file (arXiv URLs) or .bib file (BibTeX)")
+    p.add_argument("--bib", action="store_true", help="Force BibTeX parsing (auto-detected for .bib files)")
     p.add_argument("--no-pdf", action="store_true", help="Skip PDF downloads")
+
+    # export (updated to support --format)
+    p = sub.add_parser("export", help="Export collection as JSON or markdown")
+    p.add_argument("--format", choices=["json", "markdown"], default="json", dest="format",
+                   help="Output format (default: json)")
+
+    # find
+    p = sub.add_parser("find", help="Search arXiv/S2 for papers by topic")
+    p.add_argument("query", help="Search query")
+    p.add_argument("--source", choices=["arxiv", "s2"], default="arxiv")
+    p.add_argument("--limit", type=int, default=10)
+
+    # read
+    p = sub.add_parser("read", help="Guided reading view for a paper")
+    p.add_argument("id", help="Paper ID")
+
+    # progress
+    sub.add_parser("progress", help="Visual progress dashboard")
 
     # install-skill
     sub.add_parser("install-skill", help="Install SKILL.md for agent integration")
@@ -733,6 +1058,9 @@ HANDLERS = {
     "orphans": _cmd_orphans,
     "enrich": _cmd_enrich,
     "import": _cmd_import,
+    "find": _cmd_find,
+    "read": _cmd_read,
+    "progress": _cmd_progress,
 }
 
 

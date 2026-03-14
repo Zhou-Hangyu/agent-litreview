@@ -24,7 +24,7 @@ Simplest way — just paste an arXiv URL:
 alit add "https://arxiv.org/abs/1706.03762"
 ```
 
-This auto-fetches title, abstract, authors, year from arXiv + downloads the PDF. One command, done.
+This auto-fetches title, abstract, authors, year from arXiv + downloads the PDF. Auto-tags are added from the abstract. One command, done.
 
 For non-arXiv papers, provide metadata yourself:
 
@@ -32,11 +32,13 @@ For non-arXiv papers, provide metadata yourself:
 alit add "Some Workshop Paper" --year 2024 --authors "Smith, Jones" --abstract "..."
 ```
 
-Bulk import from a file:
+Bulk import from a file or BibTeX:
 
 ```bash
 alit import papers.txt          # one arXiv URL per line, # comments
 alit import papers.txt --no-pdf # skip PDF downloads
+alit import library.bib         # BibTeX export from Zotero/Mendeley/Google Scholar
+alit import refs.bib --no-pdf   # BibTeX, skip PDF downloads
 ```
 
 PDFs:
@@ -45,6 +47,17 @@ PDFs:
 - `alit attach <id> /path/to/file.pdf` → attach PDF to existing paper
 - `alit fetch-pdf <id>` → download for existing paper
 - `--no-pdf` → skip download
+
+## Importing from Other Tools
+
+Export your library as BibTeX from Zotero, Mendeley, Google Scholar, etc., then:
+
+```bash
+alit import library.bib                # auto-detects .bib format
+alit import references.bib --no-pdf    # skip PDF downloads
+```
+
+Papers are deduplicated by citekey. arXiv papers are auto-enriched with full metadata.
 
 ## After Reading a Paper
 
@@ -99,8 +112,11 @@ alit recommend 5
 | Command | What it does |
 |---------|-------------|
 | `alit init` | Create papers.db |
-| `alit add <title-or-url>` | Add paper (auto-enriches arXiv URLs) |
-| `alit import <file>` | Bulk-add from file of arXiv URLs |
+| `alit add <title-or-url>` | Add paper (auto-enriches arXiv URLs, auto-tags from abstract) |
+| `alit find <query>` | Search arXiv/S2 for papers by topic |
+| `alit import <file> [--bib]` | Bulk-add from URL file or BibTeX (.bib) |
+| `alit read <id>` | Guided reading view with citations |
+| `alit progress` | Visual progress dashboard |
 | `alit enrich` | Batch-fetch metadata for papers missing abstracts |
 | `alit show <id>` | Paper details |
 | `alit list [--status X]` | List papers |
@@ -118,7 +134,7 @@ alit recommend 5
 | `alit attach <id> <path>` | Attach local PDF to paper |
 | `alit orphans` | List citations to papers not in collection |
 | `alit fetch-pdf <id>` | Download PDF for existing paper |
-| `alit export` | Export as JSON |
+| `alit export [--format X]` | Export as JSON or shareable markdown |
 
 All commands support `--json` for machine-readable output.
 

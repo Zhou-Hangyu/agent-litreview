@@ -583,6 +583,60 @@ def delete_paper(conn: sqlite3.Connection, id: str) -> bool:
     return cur.rowcount > 0
 
 
+_TAG_KEYWORDS = {
+    "transformer": ["transformer", "attention mechanism", "self-attention"],
+    "diffusion": ["diffusion model", "denoising", "score-based", "ddpm"],
+    "reinforcement-learning": ["reinforcement learning", "policy gradient", "q-learning", "rl agent"],
+    "nlp": ["natural language", "language model", "text generation", "tokenization"],
+    "computer-vision": ["image classification", "object detection", "convolutional", "visual"],
+    "generative": ["generative model", "gan", "vae", "variational autoencoder"],
+    "graph-neural-network": ["graph neural", "gnn", "node embedding", "graph convolution"],
+    "optimization": ["optimization", "gradient descent", "convergence", "learning rate"],
+    "finance": ["financial", "trading", "market", "portfolio", "stock", "order book", "lob"],
+    "simulation": ["simulation", "simulator", "synthetic data", "agent-based"],
+    "foundation-model": ["foundation model", "pretrained", "large language model", "llm"],
+    "survey": ["survey", "review", "overview", "taxonomy"],
+}
+
+
+def _auto_tag_from_abstract(abstract: str, title: str = "") -> list[str]:
+    text = f"{title} {abstract}".lower()
+    tags = []
+    for tag, keywords in _TAG_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            tags.append(tag)
+    return tags[:8]
+
+
+def _parse_bibtex(text: str) -> list[dict]:
+    entries = []
+    raw_entries = re.split(r'\n\s*@', text)
+    for raw in raw_entries:
+        raw = raw.strip()
+        if not raw:
+            continue
+        if not raw.startswith('@'):
+            raw = '@' + raw
+
+        header_match = re.match(r'@(\w+)\s*\{\s*([^,\s]+)\s*,', raw)
+        if not header_match:
+            continue
+        entry_type = header_match.group(1).lower()
+        citekey = header_match.group(2).strip()
+
+        entry: dict = {"_type": entry_type, "_citekey": citekey}
+        for field_match in re.finditer(
+            r'(\w+)\s*=\s*(?:\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}|"([^"]*)"|(\d+))', raw
+        ):
+            field_name = field_match.group(1).lower()
+            value = field_match.group(2) or field_match.group(3) or field_match.group(4) or ""
+            value = re.sub(r'\s+', ' ', value).strip()
+            value = value.replace('{', '').replace('}', '')
+            entry[field_name] = value
+        entries.append(entry)
+    return entries
+
+
 def get_stats(conn: sqlite3.Connection) -> dict:
     """Collection overview stats."""
     total = conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
