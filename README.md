@@ -37,13 +37,6 @@ alit init                # creates .alit/ in your project
 alit install-skill       # teaches your agent the full workflow
 ```
 
-## Update
-
-```bash
-pip install --upgrade alit
-alit install-skill
-```
-
 ## Set your taste
 
 Tell alit what kind of research excites you. This drives recommendations — papers matching your taste rank higher.
@@ -63,6 +56,13 @@ alit add "https://arxiv.org/abs/1706.03762"     # fetches metadata + PDF
 alit import library.bib                          # or dump your Zotero/Mendeley
 alit recommend 5                                 # ranked by your taste
 alit ask "What are the key attention mechanisms?" --depth 2
+```
+
+## Update
+
+```bash
+pip install --upgrade alit
+alit install-skill
 ```
 
 ## Commands
