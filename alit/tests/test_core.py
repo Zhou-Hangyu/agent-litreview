@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from literature.scripts.db import (
+from alit.scripts.db import (
     add_citation,
     add_paper,
     delete_paper,
@@ -16,10 +16,10 @@ from literature.scripts.db import (
     list_papers,
     update_paper,
 )
-from literature.scripts.pagerank import compute_pagerank, update_pagerank
-from literature.scripts.recommend import recommend
-from literature.scripts.search import search
-from literature.scripts.synthesize import funnel_retrieve
+from alit.scripts.pagerank import compute_pagerank, update_pagerank
+from alit.scripts.recommend import recommend
+from alit.scripts.search import search
+from alit.scripts.synthesize import funnel_retrieve
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ def test_add_paper(db):
 
 
 def test_add_paper_auto_id(tmp_path):
-    from literature.scripts.lit import _auto_id
+    from alit.scripts.lit import _auto_id
 
     auto_id = _auto_id("Attention Is All You Need")
     assert auto_id != ""
@@ -282,7 +282,7 @@ def test_delete(db):
 
 
 def test_export_json(tmp_path):
-    from literature.scripts.lit import run
+    from alit.scripts.lit import run
 
     conn = init_db(tmp_path)
     add_paper(conn, "p1", "Paper One", year=2021)
@@ -302,16 +302,16 @@ def test_export_json(tmp_path):
     assert len(data["citations"]) == 1
 
 
-def test_purpose(db):
-    db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('purpose', ?)",
+def test_taste(db):
+    db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('taste', ?)",
                ("Research on limit order book simulation and market microstructure",))
     db.commit()
-    row = db.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+    row = db.execute("SELECT value FROM meta WHERE key='taste'").fetchone()
     assert "limit order book" in row["value"]
 
 
 def test_cli_help(tmp_path):
-    from literature.scripts.lit import run
+    from alit.scripts.lit import run
 
     with pytest.raises(SystemExit) as exc:
         run(["--help"])
@@ -319,7 +319,7 @@ def test_cli_help(tmp_path):
 
 
 def test_cli_init(tmp_path):
-    from literature.scripts.lit import run
+    from alit.scripts.lit import run
 
     target = tmp_path / "myproject"
     code = run(["init", "--path", str(target)])
@@ -351,7 +351,7 @@ def test_delete_cascades_citations(db):
 
 
 def test_orphan_citations(db):
-    from literature.scripts.db import get_orphan_citations
+    from alit.scripts.db import get_orphan_citations
     add_paper(db, "p1", "Paper One")
     add_citation(db, "p1", "missing_paper")
     orphans = get_orphan_citations(db)
@@ -360,14 +360,14 @@ def test_orphan_citations(db):
 
 
 def test_sanitize_id(db):
-    from literature.scripts.db import _sanitize_id
+    from alit.scripts.db import _sanitize_id
     assert _sanitize_id("hello world!@#") == "hello_world"
     assert _sanitize_id("valid_id-123") == "valid_id-123"
     assert _sanitize_id("") == "paper"
 
 
 def test_auto_id_uniqueness(tmp_path):
-    from literature.scripts.lit import _auto_id
+    from alit.scripts.lit import _auto_id
     conn = init_db(tmp_path)
     add_paper(conn, "attention_is_all", "Attention Is All You Need")
     second_id = _auto_id("Attention Is All You Need", conn)
@@ -377,19 +377,19 @@ def test_auto_id_uniqueness(tmp_path):
 
 
 def test_url_auto_detect():
-    from literature.scripts.lit import _is_arxiv_url
+    from alit.scripts.lit import _is_arxiv_url
     assert _is_arxiv_url("https://arxiv.org/abs/1706.03762") == "1706.03762"
     assert _is_arxiv_url("https://arxiv.org/pdf/2301.00001.pdf") == "2301.00001"
     assert _is_arxiv_url("not a url") is None
     assert _is_arxiv_url("https://example.com/paper") is None
 
 
-def test_recommend_with_purpose_keywords(db):
+def test_recommend_with_taste_keywords(db):
     add_paper(db, "p1", "Limit Order Book Simulation", year=2024,
               abstract="LOB simulation using diffusion models", status="unread")
     add_paper(db, "p2", "Cat Classification", year=2024,
               abstract="Deep learning for cat photos", status="unread")
-    results = recommend(db, top_k=10, purpose_keywords=["limit", "order", "book", "simulation"])
+    results = recommend(db, top_k=10, taste_keywords=["limit", "order", "book", "simulation"])
     assert results[0]["id"] == "p1"
     assert results[0]["breakdown"]["relevance"] > results[1]["breakdown"]["relevance"]
 
@@ -416,7 +416,7 @@ def test_pagerank_update_stored(db):
 
 
 def test_import_file(tmp_path):
-    from literature.scripts.lit import run
+    from alit.scripts.lit import run
     conn = init_db(tmp_path)
     conn.close()
 
@@ -432,7 +432,7 @@ def test_import_file(tmp_path):
 
 
 def test_auto_tag(db):
-    from literature.scripts.db import _auto_tag_from_abstract
+    from alit.scripts.db import _auto_tag_from_abstract
     tags = _auto_tag_from_abstract(
         "This paper introduces a transformer-based attention mechanism for financial market simulation"
     )
@@ -442,20 +442,20 @@ def test_auto_tag(db):
 
 
 def test_auto_tag_empty(db):
-    from literature.scripts.db import _auto_tag_from_abstract
+    from alit.scripts.db import _auto_tag_from_abstract
     tags = _auto_tag_from_abstract("")
     assert tags == []
 
 
 def test_auto_tag_title_only(db):
-    from literature.scripts.db import _auto_tag_from_abstract
+    from alit.scripts.db import _auto_tag_from_abstract
     tags = _auto_tag_from_abstract("", "Survey of large language models")
     assert "survey" in tags
     assert "foundation-model" in tags
 
 
 def test_auto_tag_max_8(db):
-    from literature.scripts.db import _auto_tag_from_abstract
+    from alit.scripts.db import _auto_tag_from_abstract
     text = ("transformer attention self-attention diffusion model denoising reinforcement learning "
             "natural language image classification graph neural optimization survey")
     tags = _auto_tag_from_abstract(text)
@@ -463,7 +463,7 @@ def test_auto_tag_max_8(db):
 
 
 def test_parse_bibtex(db):
-    from literature.scripts.db import _parse_bibtex
+    from alit.scripts.db import _parse_bibtex
     bib = """
 @article{vaswani2017attention,
   title={Attention Is All You Need},
@@ -482,7 +482,7 @@ def test_parse_bibtex(db):
 
 
 def test_parse_bibtex_multiple(db):
-    from literature.scripts.db import _parse_bibtex
+    from alit.scripts.db import _parse_bibtex
     bib = """
 @article{paper1,
   title={First Paper},
@@ -499,7 +499,7 @@ def test_parse_bibtex_multiple(db):
 
 
 def test_parse_bibtex_empty():
-    from literature.scripts.db import _parse_bibtex
+    from alit.scripts.db import _parse_bibtex
     assert _parse_bibtex("") == []
     assert _parse_bibtex("no bibtex here") == []
 
@@ -516,7 +516,7 @@ def test_progress_command(db):
 def test_progress_cli(tmp_path):
     import io
     from unittest.mock import patch
-    from literature.scripts.lit import run
+    from alit.scripts.lit import run
 
     conn = init_db(tmp_path)
     add_paper(conn, "p1", "Paper One", year=2021, status="read")
@@ -535,7 +535,7 @@ def test_progress_cli(tmp_path):
 def test_export_markdown(tmp_path):
     import io
     from unittest.mock import patch
-    from literature.scripts.lit import run
+    from alit.scripts.lit import run
 
     conn = init_db(tmp_path)
     add_paper(conn, "p1", "Paper One", year=2021, status="read",
@@ -556,7 +556,7 @@ def test_export_markdown(tmp_path):
 def test_read_command(tmp_path):
     import io
     from unittest.mock import patch
-    from literature.scripts.lit import _cmd_read
+    from alit.scripts.lit import _cmd_read
     import argparse
 
     conn = init_db(tmp_path)
@@ -577,7 +577,7 @@ def test_read_command(tmp_path):
 def test_read_not_found(tmp_path):
     import io
     from unittest.mock import patch
-    from literature.scripts.lit import _cmd_read
+    from alit.scripts.lit import _cmd_read
     import argparse
 
     conn = init_db(tmp_path)
@@ -590,7 +590,7 @@ def test_read_not_found(tmp_path):
 
 
 def test_import_bib(tmp_path):
-    from literature.scripts.lit import run
+    from alit.scripts.lit import run
 
     conn = init_db(tmp_path)
     conn.close()
@@ -617,7 +617,7 @@ def test_import_bib(tmp_path):
 
 
 def test_export_json_format(tmp_path):
-    from literature.scripts.lit import run
+    from alit.scripts.lit import run
     import io
     from unittest.mock import patch
 

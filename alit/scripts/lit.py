@@ -20,11 +20,11 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-from literature.scripts.db import DB_NAME, add_citation, add_paper, attach_pdf
-from literature.scripts.db import delete_paper, enrich_papers
-from literature.scripts.db import fetch_pdf_for_paper, get_db
-from literature.scripts.db import get_orphan_citations, get_paper, get_stats
-from literature.scripts.db import init_db, list_papers, update_paper
+from alit.scripts.db import DB_NAME, add_citation, add_paper, attach_pdf
+from alit.scripts.db import delete_paper, enrich_papers
+from alit.scripts.db import fetch_pdf_for_paper, get_db
+from alit.scripts.db import get_orphan_citations, get_paper, get_stats
+from alit.scripts.db import init_db, list_papers, update_paper
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ def _auto_id(title: str, conn=None) -> str:
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
-    from literature.scripts.db import LIT_DIR
+    from alit.scripts.db import LIT_DIR
     target = Path(getattr(args, "path", None) or ".")
     target.mkdir(parents=True, exist_ok=True)
     db_path = target / LIT_DIR / DB_NAME
@@ -81,7 +81,7 @@ _STOPWORDS = frozenset(
 )
 
 
-def _extract_purpose_keywords(text: str) -> list[str]:
+def _extract_taste_keywords(text: str) -> list[str]:
     import re
     text = re.sub(r"#+\s+.*", "", text)
     text = re.sub(r"[*_`\[\]()>]", " ", text)
@@ -126,7 +126,7 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
             kwargs["url"] = f"https://arxiv.org/abs/{arxiv}"
 
     if arxiv and not kwargs.get("abstract"):
-        from literature.scripts.db import _enrich_one_arxiv, _enrich_one_s2
+        from alit.scripts.db import _enrich_one_arxiv, _enrich_one_s2
         enriched = _enrich_one_arxiv(arxiv) or _enrich_one_s2(arxiv)
         if enriched:
             if enriched.get("title") and title.startswith("arXiv:"):
@@ -136,7 +136,7 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
     paper = add_paper(conn, paper_id, title, **kwargs)
 
     if not kwargs.get("tags") and paper and paper.get("abstract"):
-        from literature.scripts.db import _auto_tag_from_abstract
+        from alit.scripts.db import _auto_tag_from_abstract
         auto_tags = _auto_tag_from_abstract(paper["abstract"], paper["title"])
         if auto_tags:
             update_paper(conn, paper_id, tags=",".join(auto_tags))
@@ -172,11 +172,11 @@ def _cmd_show(args: argparse.Namespace, conn) -> int:
         print(f"Paper not found: {args.id}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):
-        from literature.scripts.db import get_citations
+        from alit.scripts.db import get_citations
         cites = get_citations(conn, args.id)
         print(json.dumps({**paper, "citations": cites}, ensure_ascii=False))
     else:
-        from literature.scripts.db import get_citations
+        from alit.scripts.db import get_citations
         print(f"id:         {paper['id']}")
         print(f"title:      {paper['title']}")
         print(f"authors:    {paper['authors']}")
@@ -249,7 +249,7 @@ def _cmd_list(args: argparse.Namespace, conn) -> int:
 
 
 def _cmd_search(args: argparse.Namespace, conn) -> int:
-    from literature.scripts.search import search
+    from alit.scripts.search import search
 
     top_k = getattr(args, "top_k", 20)
     results = search(conn, args.query, top_k=top_k)
@@ -352,8 +352,8 @@ def _cmd_tag(args: argparse.Namespace, conn) -> int:
 
 
 def _cmd_recommend(args: argparse.Namespace, conn) -> int:
-    from literature.scripts.recommend import recommend
-    from literature.scripts.pagerank import update_pagerank
+    from alit.scripts.recommend import recommend
+    from alit.scripts.pagerank import update_pagerank
 
     citation_count = conn.execute("SELECT COUNT(*) FROM citations").fetchone()[0]
     last_pr = conn.execute("SELECT value FROM meta WHERE key='_pagerank_edge_count'").fetchone()
@@ -363,10 +363,10 @@ def _cmd_recommend(args: argparse.Namespace, conn) -> int:
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('_pagerank_edge_count', ?)", (str(citation_count),))
         conn.commit()
 
-    purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
-    purpose_keywords: list[str] | None = None
-    if purpose_row and purpose_row["value"]:
-        purpose_keywords = _extract_purpose_keywords(purpose_row["value"])
+    taste_row = conn.execute("SELECT value FROM meta WHERE key='taste'").fetchone()
+    taste_keywords: list[str] | None = None
+    if taste_row and taste_row["value"]:
+        taste_keywords = _extract_taste_keywords(taste_row["value"])
 
     raw = getattr(args, "n", None)
     try:
@@ -374,7 +374,7 @@ def _cmd_recommend(args: argparse.Namespace, conn) -> int:
     except (ValueError, TypeError):
         top_k = 10
 
-    results = recommend(conn, top_k=top_k, purpose_keywords=purpose_keywords)
+    results = recommend(conn, top_k=top_k, taste_keywords=taste_keywords)
     if getattr(args, "json", False):
         print(json.dumps(results, ensure_ascii=False))
         return 0
@@ -400,7 +400,7 @@ def _cmd_recommend(args: argparse.Namespace, conn) -> int:
 
 
 def _cmd_ask(args: argparse.Namespace, conn) -> int:
-    from literature.scripts.synthesize import format_funnel_output, funnel_retrieve
+    from alit.scripts.synthesize import format_funnel_output, funnel_retrieve
 
     depth = getattr(args, "depth", 2)
     result = funnel_retrieve(conn, args.question, depth=depth)
@@ -427,7 +427,7 @@ def _cmd_stats(args: argparse.Namespace, conn) -> int:
             print(f"  ({stats['orphan_citations']} orphan)")
         else:
             print()
-        print(f"Taste set:    {'yes' if stats['has_purpose'] else 'no'}")
+        print(f"Taste set:    {'yes' if stats['has_taste'] else 'no'}")
         print("Status:")
         for st, cnt in sorted(stats["by_status"].items()):
             print(f"  {st:15s}: {cnt}")
@@ -450,23 +450,23 @@ def _cmd_export(args: argparse.Namespace, conn) -> int:
     if fmt == "json":
         papers = [dict(r) for r in conn.execute("SELECT * FROM papers ORDER BY year DESC").fetchall()]
         citations = [dict(r) for r in conn.execute("SELECT * FROM citations").fetchall()]
-        purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+        taste_row = conn.execute("SELECT value FROM meta WHERE key='taste'").fetchone()
         data = {
             "papers": papers,
             "citations": citations,
-            "purpose": purpose_row["value"] if purpose_row else "",
+            "taste": taste_row["value"] if taste_row else "",
         }
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return 0
 
     if fmt == "markdown":
-        purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+        taste_row = conn.execute("SELECT value FROM meta WHERE key='taste'").fetchone()
         papers = [dict(r) for r in conn.execute("SELECT * FROM papers ORDER BY year DESC").fetchall()]
         stats = get_stats(conn)
 
         lines = ["# Literature Review", ""]
-        if purpose_row and purpose_row["value"]:
-            lines.append(f"> {purpose_row['value'][:200]}")
+        if taste_row and taste_row["value"]:
+            lines.append(f"> {taste_row['value'][:200]}")
             lines.append("")
         lines.append(f"**{stats['total']} papers** | {stats.get('with_l4', 0)} summarized | {stats['citations']} citations\n")
 
@@ -554,13 +554,13 @@ def _cmd_fetch_pdf(args: argparse.Namespace, conn) -> int:
 def _cmd_taste(args: argparse.Namespace, conn) -> int:
     text = getattr(args, "text", None)
     if not text:
-        row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+        row = conn.execute("SELECT value FROM meta WHERE key='taste'").fetchone()
         if row and row["value"]:
             print(row["value"])
         else:
             print("No taste set. Use: alit taste \"what kind of research excites you\"")
         return 0
-    conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('purpose', ?)", (text,))
+    conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('taste', ?)", (text,))
     conn.commit()
     print(f"Taste set ({len(text)} chars)")
     return 0
@@ -568,7 +568,7 @@ def _cmd_taste(args: argparse.Namespace, conn) -> int:
 
 def _import_bibtex(args: argparse.Namespace, conn, file_path: Path) -> int:
     import re as _re
-    from literature.scripts.db import _parse_bibtex, _auto_tag_from_abstract, _sanitize_id
+    from alit.scripts.db import _parse_bibtex, _auto_tag_from_abstract, _sanitize_id
 
     text = file_path.read_text(encoding="utf-8", errors="replace")
     entries = _parse_bibtex(text)
@@ -618,7 +618,7 @@ def _import_bibtex(args: argparse.Namespace, conn, file_path: Path) -> int:
         add_paper(conn, paper_id, title, **kwargs)
 
         if arxiv_id and not kwargs.get("abstract"):
-            from literature.scripts.db import _enrich_one_arxiv, _enrich_one_s2
+            from alit.scripts.db import _enrich_one_arxiv, _enrich_one_s2
             enriched = _enrich_one_arxiv(arxiv_id) or _enrich_one_s2(arxiv_id)
             if enriched:
                 update_paper(conn, paper_id, **{k: v for k, v in enriched.items() if k != "title" and v})
@@ -644,7 +644,7 @@ def _cmd_import(args: argparse.Namespace, conn) -> int:
     if is_bib:
         return _import_bibtex(args, conn, file_path)
 
-    from literature.scripts.db import _enrich_batch_arxiv, _enrich_one_s2
+    from alit.scripts.db import _enrich_batch_arxiv, _enrich_one_s2
 
     db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
     no_pdf = getattr(args, "no_pdf", False)
@@ -772,7 +772,7 @@ def _cmd_find(args: argparse.Namespace, conn) -> int:
                 print(f"  {i:2d}. [{r['year'] or '????'}] {r['title'][:60]} ({first_author}) arxiv:{r['arxiv_id']}{marker}")
             print(f"\nTo add: alit add \"https://arxiv.org/abs/<id>\"")
     else:
-        from literature.scripts.db import _fetch_url
+        from alit.scripts.db import _fetch_url
         encoded = _quote(query)
         url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={encoded}&limit={limit}&fields=title,abstract,year,authors,externalIds,url"
         try:
@@ -801,7 +801,7 @@ def _cmd_find(args: argparse.Namespace, conn) -> int:
 
 
 def _cmd_read(args: argparse.Namespace, conn) -> int:
-    from literature.scripts.db import get_citations
+    from alit.scripts.db import get_citations
     paper = get_paper(conn, args.id)
     if paper is None:
         print(f"Paper not found: {args.id}", file=sys.stderr)
@@ -883,7 +883,7 @@ def _cmd_progress(args: argparse.Namespace, conn) -> int:
         print(f" ({stats['orphan_citations']} orphan)")
     else:
         print()
-    if stats.get("has_purpose"):
+    if stats.get("has_taste"):
         print(f"  Taste:      ✓ set")
     else:
         print(f"  Taste:      ✗ not set (run: alit taste \"what excites you\")")
@@ -1000,11 +1000,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("delete", help="Remove a paper")
     p.add_argument("id", help="Paper ID")
 
-    # taste (alias: purpose)
+    # taste
     p = sub.add_parser("taste", help="Set or show your research taste")
     p.add_argument("text", nargs="?", default=None, help="What kind of research excites you (omit to show current)")
-    p = sub.add_parser("purpose", help=argparse.SUPPRESS)
-    p.add_argument("text", nargs="?", default=None)
 
     # attach
     p = sub.add_parser("attach", help="Attach a local PDF to a paper")
@@ -1070,7 +1068,6 @@ HANDLERS = {
     "delete": _cmd_delete,
     "export": _cmd_export,
     "taste": _cmd_taste,
-    "purpose": _cmd_taste,
     "fetch-pdf": _cmd_fetch_pdf,
     "attach": _cmd_attach,
     "orphans": _cmd_orphans,
@@ -1106,7 +1103,7 @@ def run(argv: list[str] | None = None, *, root: str | Path | None = None) -> int
         return 0
 
     # All other commands need papers.db
-    from literature.scripts.db import LIT_DIR
+    from alit.scripts.db import LIT_DIR
     db_path = Path(root) if root else Path.cwd()
     new_db = db_path / LIT_DIR / DB_NAME
     old_db = db_path / DB_NAME

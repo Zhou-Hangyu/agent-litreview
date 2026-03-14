@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 keywords = ["literature-review", "research", "agents", "sqlite", "alit"]
 
 [project.scripts]
-alit = "literature.scripts.lit:main"
+alit = "alit.scripts.lit:main"
 
 [project.urls]
 Repository = "https://github.com/Zhou-Hangyu/alit"
@@ -18,10 +18,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["literature"]
+packages = ["alit"]
 
 [tool.uv]
 dev-dependencies = ["pytest>=8.0.0"]
 
 [tool.pytest.ini_options]
-testpaths = ["literature/tests"]
+testpaths = ["alit/tests"]

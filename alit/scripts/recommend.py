@@ -12,7 +12,7 @@ from datetime import datetime
 def recommend(
     conn: sqlite3.Connection,
     top_k: int = 10,
-    purpose_keywords: list[str] | None = None,
+    taste_keywords: list[str] | None = None,
 ) -> list[dict]:
     """Recommend papers to read next.
 
@@ -21,7 +21,7 @@ def recommend(
     Args:
         conn: Open database connection.
         top_k: Number of recommendations to return.
-        purpose_keywords: Optional list of keywords to boost relevance.
+        taste_keywords: Optional list of keywords to boost relevance.
 
     Returns:
         List of paper dicts with added 'score' field, sorted descending.
@@ -45,12 +45,12 @@ def recommend(
 
         # Purpose relevance (simple keyword match)
         relevance = 0.0
-        if purpose_keywords:
+        if taste_keywords:
             text = f"{p['title']} {p['abstract']} {p['tags']}".lower()
-            hits = sum(1 for kw in purpose_keywords if kw in text)
-            relevance = min(hits / max(len(purpose_keywords), 1), 1.0)
+            hits = sum(1 for kw in taste_keywords if kw in text)
+            relevance = min(hits / max(len(taste_keywords), 1), 1.0)
 
-        if purpose_keywords:
+        if taste_keywords:
             score = 0.40 * relevance + 0.30 * pr + 0.30 * recency
         else:
             score = 0.50 * pr + 0.50 * recency

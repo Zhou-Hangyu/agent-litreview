@@ -34,7 +34,7 @@ def funnel_retrieve(
     Returns:
         Dict with keys: question, depth, candidates, shortlist, details, deep.
     """
-    from literature.scripts.search import search
+    from alit.scripts.search import search
 
     result: dict = {
         "question": question,

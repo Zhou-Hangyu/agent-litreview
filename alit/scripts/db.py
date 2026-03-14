@@ -673,7 +673,7 @@ def get_stats(conn: sqlite3.Connection) -> dict:
     orphans = conn.execute("""
         SELECT COUNT(*) FROM citations c LEFT JOIN papers p ON c.to_id = p.id WHERE p.id IS NULL
     """).fetchone()[0]
-    purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
+    taste_row = conn.execute("SELECT value FROM meta WHERE key='taste'").fetchone()
     return {
         "total": row["total"],
         "by_status": by_status,
@@ -683,5 +683,5 @@ def get_stats(conn: sqlite3.Connection) -> dict:
         "with_abstract": row["with_abstract"] or 0,
         "with_l4": row["with_l4"] or 0,
         "with_l2": row["with_l2"] or 0,
-        "has_purpose": bool(purpose_row and purpose_row["value"]),
+        "has_taste": bool(taste_row and taste_row["value"]),
     }
