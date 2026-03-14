@@ -33,7 +33,12 @@ lit add "Attention Is All You Need" \
 
 If `--id` is omitted, one is auto-generated from the title.
 
-When `--arxiv` is provided, the PDF is auto-downloaded to `papers/` next to `papers.db`. Use `--no-pdf` to skip. For existing papers: `lit fetch-pdf <id>`.
+PDFs are handled automatically:
+- `--arxiv "1706.03762"` → auto-downloads from arXiv
+- `--pdf /path/to/local.pdf` → copies a local PDF handed to you in the session
+- `--no-pdf` → skip download
+- `lit attach <id> /path/to/file.pdf` → attach PDF to existing paper
+- `lit fetch-pdf <id>` → download PDF for existing paper (needs arxiv_id)
 
 ## After Reading a Paper
 
@@ -48,6 +53,17 @@ lit summarize vaswani2017attention --l2 '["Self-attention O(1) vs RNN O(n)", "Mu
 
 lit cite vaswani2017attention bahdanau2014attention --type extends
 ```
+
+## Citation Verification
+
+When you add citations, the cited paper doesn't have to exist yet. Use `lit orphans` to find missing papers:
+
+```bash
+lit orphans
+# Output: vaswani2017attention --[extends]--> bahdanau2014attention  (MISSING)
+```
+
+**Workflow**: After adding all citations for a paper, run `lit orphans`. For each missing paper, search online (arXiv, Google Scholar) to verify it exists, then `lit add` it to the collection. This ensures your citation graph is complete and accurate.
 
 ## Searching and Synthesis
 
@@ -91,6 +107,8 @@ lit recommend 5
 | `lit stats` | Collection overview |
 | `lit delete <id>` | Remove paper |
 | `lit purpose <text>` | Set research purpose |
+| `lit attach <id> <path>` | Attach local PDF to paper |
+| `lit orphans` | List citations to papers not in collection |
 | `lit fetch-pdf <id>` | Download PDF for existing paper |
 | `lit export` | Export as JSON |
 
@@ -102,4 +120,5 @@ All commands support `--json` for machine-readable output.
 - **Status**: unread → skimmed → read → synthesized
 - **Citation types**: cites, extends, contradicts, uses_method, uses_dataset, surveys
 - **Provenance**: always pass `--model` when summarizing — it's tracked
-- **PDFs**: auto-downloaded from arXiv when `--arxiv` is set. Stored in `papers/` next to `papers.db`
+- **PDFs**: auto-downloaded from arXiv, or attached from local files via `--pdf` or `lit attach`
+- **Orphan citations**: `lit orphans` shows cited papers not in collection — verify and add them

@@ -59,9 +59,7 @@ def init_db(path: Path | None = None) -> sqlite3.Connection:
             from_id TEXT NOT NULL,
             to_id TEXT NOT NULL,
             type TEXT DEFAULT 'cites',
-            PRIMARY KEY (from_id, to_id),
-            FOREIGN KEY (from_id) REFERENCES papers(id),
-            FOREIGN KEY (to_id) REFERENCES papers(id)
+            PRIMARY KEY (from_id, to_id)
         );
 
         CREATE TABLE IF NOT EXISTS meta (
@@ -242,6 +240,30 @@ def get_citations(conn: sqlite3.Connection, id: str) -> dict:
         for r in conn.execute("SELECT * FROM citations WHERE to_id = ?", (id,)).fetchall()
     ]
     return {"cites": outgoing, "cited_by": incoming}
+
+
+def attach_pdf(conn: sqlite3.Connection, paper_id: str, src: Path, db_path: Path) -> str:
+    """Copy a local PDF into papers/ and set pdf_path. Returns the relative path."""
+    import shutil
+    papers_dir = db_path / "papers"
+    papers_dir.mkdir(exist_ok=True)
+    filename = paper_id + ".pdf"
+    dest = papers_dir / filename
+    shutil.copy2(str(src), str(dest))
+    rel = f"papers/{filename}"
+    update_paper(conn, paper_id, pdf_path=rel)
+    return rel
+
+
+def get_orphan_citations(conn: sqlite3.Connection) -> list[dict]:
+    """Find citation edges where to_id doesn't exist in papers table."""
+    rows = conn.execute("""
+        SELECT c.from_id, c.to_id, c.type
+        FROM citations c
+        LEFT JOIN papers p ON c.to_id = p.id
+        WHERE p.id IS NULL
+    """).fetchall()
+    return [dict(r) for r in rows]
 
 
 def delete_paper(conn: sqlite3.Connection, id: str) -> bool:

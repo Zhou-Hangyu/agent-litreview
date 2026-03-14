@@ -19,8 +19,9 @@ import json
 import sys
 from pathlib import Path
 
-from literature.scripts.db import DB_NAME, add_citation, add_paper, delete_paper
-from literature.scripts.db import fetch_pdf_for_paper, get_db, get_paper, get_stats
+from literature.scripts.db import DB_NAME, add_citation, add_paper, attach_pdf
+from literature.scripts.db import delete_paper, fetch_pdf_for_paper, get_db
+from literature.scripts.db import get_orphan_citations, get_paper, get_stats
 from literature.scripts.db import init_db, list_papers, update_paper
 
 
@@ -70,9 +71,18 @@ def _cmd_add(args: argparse.Namespace, conn) -> int:
 
     paper = add_paper(conn, paper_id, title, **kwargs)
 
+    db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
+    local_pdf = getattr(args, "pdf", None)
     no_pdf = getattr(args, "no_pdf", False)
-    if not no_pdf:
-        db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
+
+    if local_pdf:
+        src = Path(local_pdf)
+        if src.exists():
+            attach_pdf(conn, paper_id, src, db_path)
+            paper = get_paper(conn, paper_id)
+        else:
+            print(f"Warning: PDF not found at {src}", file=sys.stderr)
+    elif not no_pdf:
         pdf = fetch_pdf_for_paper(conn, paper_id, db_path)
         if pdf:
             paper = get_paper(conn, paper_id)
@@ -200,12 +210,12 @@ def _cmd_cite(args: argparse.Namespace, conn) -> int:
     if not get_paper(conn, from_id):
         print(f"Paper not found: {from_id}", file=sys.stderr)
         return 1
-    if not get_paper(conn, to_id):
-        print(f"Paper not found: {to_id}", file=sys.stderr)
-        return 1
 
     add_citation(conn, from_id, to_id, type_)
-    print(f"Citation added: {from_id} --[{type_}]--> {to_id}")
+    if not get_paper(conn, to_id):
+        print(f"Citation added: {from_id} --[{type_}]--> {to_id}  (⚠ {to_id} not in collection — run `lit orphans` to review)")
+    else:
+        print(f"Citation added: {from_id} --[{type_}]--> {to_id}")
     return 0
 
 
@@ -306,6 +316,36 @@ def _cmd_export(args: argparse.Namespace, conn) -> int:
     return 0
 
 
+def _cmd_attach(args: argparse.Namespace, conn) -> int:
+    paper = get_paper(conn, args.id)
+    if not paper:
+        print(f"Paper not found: {args.id}", file=sys.stderr)
+        return 1
+    src = Path(args.path)
+    if not src.exists():
+        print(f"File not found: {src}", file=sys.stderr)
+        return 1
+    db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
+    rel = attach_pdf(conn, args.id, src, db_path)
+    print(f"Attached: {rel}")
+    return 0
+
+
+def _cmd_orphans(args: argparse.Namespace, conn) -> int:
+    orphans = get_orphan_citations(conn)
+    if getattr(args, "json", False):
+        print(json.dumps(orphans, ensure_ascii=False))
+    else:
+        if not orphans:
+            print("No orphan citations. All cited papers exist in the collection.")
+            return 0
+        print(f"{len(orphans)} citations reference papers not in the collection:\n")
+        for o in orphans:
+            print(f"  {o['from_id']} --[{o['type']}]--> {o['to_id']}  (MISSING)")
+        print(f"\nTo resolve: look up each missing paper and `lit add` it.")
+    return 0
+
+
 def _cmd_fetch_pdf(args: argparse.Namespace, conn) -> int:
     db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
     paper_id = args.id
@@ -371,6 +411,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--arxiv", default=None, dest="arxiv")
     p.add_argument("--doi", default=None)
     p.add_argument("--tags", default=None)
+    p.add_argument("--pdf", default=None, help="Path to local PDF file")
     p.add_argument("--no-pdf", action="store_true", help="Skip PDF download")
 
     # show
@@ -439,6 +480,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("purpose", help="Set research purpose")
     p.add_argument("text", help="Purpose text")
 
+    # attach
+    p = sub.add_parser("attach", help="Attach a local PDF to a paper")
+    p.add_argument("id", help="Paper ID")
+    p.add_argument("path", help="Path to PDF file")
+
+    # orphans
+    sub.add_parser("orphans", help="List citations pointing to papers not in collection")
+
     # fetch-pdf
     p = sub.add_parser("fetch-pdf", help="Download PDF for a paper")
     p.add_argument("id", help="Paper ID")
@@ -468,6 +517,8 @@ HANDLERS = {
     "export": _cmd_export,
     "purpose": _cmd_purpose,
     "fetch-pdf": _cmd_fetch_pdf,
+    "attach": _cmd_attach,
+    "orphans": _cmd_orphans,
 }
 
 
