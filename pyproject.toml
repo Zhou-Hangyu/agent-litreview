@@ -1,11 +1,19 @@
 [project]
 name = "alit"
-version = "0.2.0"
-description = "Lightweight, agent-native literature review system. Zero dependencies. SQLite-only."
+version = "0.3.0"
+description = "Persistent memory for AI agents doing literature review. Zero dependencies. SQLite-only."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
+authors = [{name = "Hangyu Zhou"}]
 keywords = ["literature-review", "research", "agents", "sqlite", "alit"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
 
 [project.scripts]
 alit = "alit.scripts.lit:main"

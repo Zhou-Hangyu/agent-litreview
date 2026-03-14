@@ -1,6 +1,6 @@
 ---
 name: alit
-version: "0.2.0"
+version: "0.3.0"
 description: "SQLite-based literature review manager for research papers. Use when adding, searching, reading, summarizing, or synthesizing academic papers. Handles arXiv URLs, BibTeX import, citation graphs, and reading recommendations. Do not use for non-academic document management, note-taking apps, or reference formatting (use a citation manager instead)."
 ---
 

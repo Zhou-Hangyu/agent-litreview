@@ -31,8 +31,9 @@ No servers. No API keys. No vector databases. No setup beyond `pip install`.
 ```bash
 pip install alit         # or: uv add alit
 alit init                # creates .alit/ in your project
-alit install-skill       # teaches your agent the full workflow
 ```
+
+The agent skill auto-installs on first run.
 
 ## Set your taste
 
@@ -53,12 +54,8 @@ alit ask "What are the key attention mechanisms?" --depth 2
 
 ## Update
 
-Not on PyPI yet. If installed from source:
-
 ```bash
-cd path/to/alit && git pull
-pip install -e .         # or: uv sync --reinstall-package alit
-alit install-skill
+pip install --upgrade alit
 ```
 
 ## Commands

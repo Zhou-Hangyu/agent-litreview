@@ -950,16 +950,26 @@ def _check_skill_version() -> None:
     if not pkg_version:
         return
 
-    for skill_dir in (
+    targets = [
         Path.home() / ".claude" / "skills" / "alit",
         Path.home() / ".agents" / "skills" / "alit",
-    ):
+    ]
+    any_installed = False
+    for skill_dir in targets:
         installed = skill_dir / "SKILL.md"
         if installed.exists():
+            any_installed = True
             installed_version = _read_skill_version(installed)
             if installed_version and installed_version != pkg_version:
                 print(f"(-o-) Skill outdated ({installed_version} → {pkg_version}). Run: alit install-skill", file=sys.stderr)
-            return
+            break
+
+    if not any_installed:
+        import shutil
+        for dest in targets:
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(pkg_skill), str(dest / "SKILL.md"))
+        print("(-o+) Skill auto-installed for your coding agent", file=sys.stderr)
 
 
 def _read_skill_version(path: Path) -> str:
