@@ -911,6 +911,44 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
 # ── Parser ─────────────────────────────────────────────────────────────────────
 
 
+_skill_checked = False
+
+
+def _check_skill_version() -> None:
+    global _skill_checked
+    if _skill_checked:
+        return
+    _skill_checked = True
+
+    pkg_skill = Path(__file__).resolve().parent.parent / "skill" / "SKILL.md"
+    if not pkg_skill.exists():
+        return
+    pkg_version = _read_skill_version(pkg_skill)
+    if not pkg_version:
+        return
+
+    for skill_dir in (
+        Path.home() / ".claude" / "skills" / "alit",
+        Path.home() / ".agents" / "skills" / "alit",
+    ):
+        installed = skill_dir / "SKILL.md"
+        if installed.exists():
+            installed_version = _read_skill_version(installed)
+            if installed_version and installed_version != pkg_version:
+                print(f"(-o-) Skill outdated ({installed_version} → {pkg_version}). Run: alit install-skill", file=sys.stderr)
+            return
+
+
+def _read_skill_version(path: Path) -> str:
+    import re
+    try:
+        text = path.read_text(encoding="utf-8")[:500]
+        m = re.search(r'^version:\s*["\']?([^"\'"\n]+)', text, re.MULTILINE)
+        return m.group(1).strip() if m else ""
+    except Exception:
+        return ""
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alit",
@@ -1093,7 +1131,8 @@ def run(argv: list[str] | None = None, *, root: str | Path | None = None) -> int
     args = parser.parse_args(argv)
     cmd = getattr(args, "cmd", None)
 
-    # These don't need an existing DB
+    _check_skill_version()
+
     if cmd == "init":
         return _cmd_init(args)
     if cmd == "install-skill":
