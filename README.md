@@ -1,15 +1,10 @@
 # (-o-) alit
 
-Persistent memory for AI agents doing literature review.
+Your AI agent reads papers so you don't have to.
 
-Your agent can search the web and find papers — but it forgets everything next session. alit is the shared brain that accumulates knowledge across sessions and across agents.
+`pip install alit` → zero dependencies, SQLite-only, works with any coding agent.
 
-```
-Reading agent  →  reads 50 papers, stores summaries, builds citation graph
-Experiment agent  →  alit ask "what baselines exist?" → instant answer from 50 papers
-```
-
-One agent's work benefits every other agent. Knowledge compounds.
+Got tokens to burn? Let your agent read 50 papers overnight and hand you a synthesis in the morning.
 
 Tell your agent:
 
@@ -17,11 +12,9 @@ Tell your agent:
 Use alit to manage my literature review. See https://github.com/Zhou-Hangyu/alit
 ```
 
-## Why alit (and why not)
+## Why alit
 
-**Use alit if:** you're doing a multi-session research project where an agent reads papers over days/weeks and you need that knowledge to persist and be queryable.
-
-**Don't need alit if:** you just want to look up one paper right now — your agent's web search already does that.
+Your agent can web-search papers anytime — but forgets everything next session. alit is persistent memory. One agent reads 50 papers, another agent queries that knowledge instantly. Knowledge compounds across sessions.
 
 ## How it works
 
@@ -31,7 +24,7 @@ Use alit to manage my literature review. See https://github.com/Zhou-Hangyu/alit
 └── pdfs/        ← auto-downloaded from arXiv
 ```
 
-No servers. No API keys. No vector databases. Zero dependencies. Pure Python stdlib.
+No servers. No API keys. No vector databases. No setup beyond `pip install`.
 
 ## Install
 
@@ -43,15 +36,11 @@ alit install-skill       # teaches your agent the full workflow
 
 ## Set your taste
 
-Tell alit what kind of research excites you. Recommendations rank papers matching your taste higher.
-
 ```bash
 alit taste "I'm into multimodal foundation models and how they learn cross-modal
 representations. Love papers with clean ablations over pure benchmark chasing.
 Especially interested in vision-language grounding and embodied AI."
 ```
-
-Change it anytime. The reading queue reranks instantly.
 
 ## Quick start
 
@@ -69,7 +58,7 @@ Not on PyPI yet. If installed from source:
 ```bash
 cd path/to/alit && git pull
 pip install -e .         # or: uv sync --reinstall-package alit
-alit install-skill       # update the agent skill
+alit install-skill
 ```
 
 ## Commands
