@@ -1,148 +1,91 @@
 ---
 name: alit
-description: "Lightweight literature review system. Zero dependencies, SQLite-only. Use when managing research papers — adding, searching, reading, summarizing, synthesizing. Run `alit init` to start."
+description: "SQLite-based literature review manager for research papers. Use when adding, searching, reading, summarizing, or synthesizing academic papers. Handles arXiv URLs, BibTeX import, citation graphs, and reading recommendations. Do not use for non-academic document management, note-taking apps, or reference formatting (use a citation manager instead)."
 ---
 
-# Literature Review System
+# alit — Literature Review System
 
-Zero dependencies. SQLite-only. You are the intelligence — the system is data plumbing.
+Data lives in `.alit/papers.db`. PDFs in `.alit/pdfs/`. Zero external dependencies.
 
-## Quick Start
+## Setup
 
-```bash
-alit init                    # creates papers.db
-alit add "Paper Title" --year 2024 --abstract "..." --authors "Smith, Jones" --arxiv "2401.12345"
-alit search "attention"      # BM25 search
-alit recommend 5             # what to read next
-```
+1. Run `alit init` to create the database.
+2. Run `alit purpose "your research goals"` to improve recommendation relevance.
 
 ## Adding Papers
 
-Simplest way — just paste an arXiv URL:
+1. For arXiv papers, run `alit add "https://arxiv.org/abs/XXXX.XXXXX"`. This fetches metadata, downloads the PDF, and auto-tags from the abstract.
+2. For non-arXiv papers, run `alit add "Title" --year 2024 --authors "Smith" --abstract "..."`.
+3. To attach a local PDF, pass `--pdf /path/to/file.pdf`.
+4. To bulk-add from a file of arXiv URLs (one per line, `#` comments), run `alit import papers.txt`.
+5. To import from Zotero/Mendeley/Google Scholar, export as `.bib` and run `alit import library.bib`.
+6. To search for papers by topic, run `alit find "query"` or `alit find "query" --source s2`.
+7. To fetch metadata for papers missing abstracts, run `alit enrich`.
+8. Skip PDF downloads on any command with `--no-pdf`.
 
-```bash
-alit add "https://arxiv.org/abs/1706.03762"
-```
+## Reading Workflow
 
-This auto-fetches title, abstract, authors, year from arXiv + downloads the PDF. Auto-tags are added from the abstract. One command, done.
+1. Run `alit recommend 5` to get the next papers to read, ranked by PageRank + relevance + recency.
+2. Run `alit read <id>` to see the paper's abstract, citations, and summaries.
+3. Read the PDF at `.alit/pdfs/<arxiv_id>.pdf` if available.
+4. After reading, store findings:
+   - `alit status <id> read`
+   - `alit note <id> "key observations..."`
+   - `alit summarize <id> --l4 "one sentence summary" --model "<model-name>"`
+   - `alit summarize <id> --l2 '["claim 1", "claim 2"]' --model "<model-name>"`
+5. Always pass `--model` when summarizing — provenance is tracked.
 
-For non-arXiv papers, provide metadata yourself:
+## Citations
 
-```bash
-alit add "Some Workshop Paper" --year 2024 --authors "Smith, Jones" --abstract "..."
-```
+1. Run `alit cite <from_id> <to_id> --type extends` to add a citation edge. Types: cites, extends, contradicts, uses_method, uses_dataset, surveys.
+2. The cited paper does not need to exist in the database yet.
+3. Run `alit orphans` to list cited papers not in the collection.
+4. For each orphan, search online to verify the paper exists, then `alit add` it.
 
-Bulk import from a file or BibTeX:
+## Search and Synthesis
 
-```bash
-alit import papers.txt          # one arXiv URL per line, # comments
-alit import papers.txt --no-pdf # skip PDF downloads
-alit import library.bib         # BibTeX export from Zotero/Mendeley/Google Scholar
-alit import refs.bib --no-pdf   # BibTeX, skip PDF downloads
-```
+1. Run `alit search "query"` for BM25 full-text search.
+2. Run `alit ask "research question" --depth 2` for cross-paper synthesis via funnel retrieval.
+   - `--depth 1`: titles + one-liners (~500 tokens)
+   - `--depth 2`: + abstracts for top-10 (~2.5K tokens)
+   - `--depth 3`: + key claims for top-3 (~3.5K tokens)
+   - `--depth 4`: + full notes for top-1 (~5K tokens)
 
-PDFs:
-- arXiv URLs → auto-downloaded
-- `--pdf /path/to/local.pdf` → copies a PDF handed to you in the session
-- `alit attach <id> /path/to/file.pdf` → attach PDF to existing paper
-- `alit fetch-pdf <id>` → download for existing paper
-- `--no-pdf` → skip download
+## Commands
 
-## Importing from Other Tools
-
-Export your library as BibTeX from Zotero, Mendeley, Google Scholar, etc., then:
-
-```bash
-alit import library.bib                # auto-detects .bib format
-alit import references.bib --no-pdf    # skip PDF downloads
-```
-
-Papers are deduplicated by citekey. arXiv papers are auto-enriched with full metadata.
-
-## After Reading a Paper
-
-```bash
-alit status vaswani2017attention read
-
-alit note vaswani2017attention "Key insight: self-attention replaces recurrence entirely. O(1) sequential ops for long-range deps."
-
-alit summarize vaswani2017attention --l4 "Transformer replaces recurrence with self-attention, achieving BLEU SOTA with greater parallelism." --model "claude-opus-4-6"
-
-alit summarize vaswani2017attention --l2 '["Self-attention O(1) vs RNN O(n)", "Multi-head attention for subspace diversity", "28.4 BLEU on WMT EN-DE"]' --model "claude-opus-4-6"
-
-alit cite vaswani2017attention bahdanau2014attention --type extends
-```
-
-## Citation Verification
-
-When you add citations, the cited paper doesn't have to exist yet. Use `alit orphans` to find missing papers:
-
-```bash
-alit orphans
-# Output: vaswani2017attention --[extends]--> bahdanau2014attention  (MISSING)
-```
-
-**Workflow**: After adding all citations for a paper, run `alit orphans`. For each missing paper, search online (arXiv, Google Scholar) to verify it exists, then `alit add` it to the collection. This ensures your citation graph is complete and accurate.
-
-## Searching and Synthesis
-
-```bash
-alit search "limit order book simulation"
-
-alit ask "What generative models exist for LOB data?" --depth 2
-```
-
-Depth controls token budget:
-- `--depth 1`: titles + one-liners (~500 tokens)
-- `--depth 2`: + abstracts for top-10 (~2.5K tokens) — DEFAULT
-- `--depth 3`: + key claims for top-3 (~3.5K tokens)
-- `--depth 4`: + full notes for top-1 (~5K tokens)
-
-## Recommendations
-
-```bash
-alit recommend 5
-
-alit purpose "Research on generative models for limit order book simulation, market microstructure, and agent-based financial systems"
-alit recommend 5
-```
-
-## All Commands
-
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `alit init` | Create papers.db |
-| `alit add <title-or-url>` | Add paper (auto-enriches arXiv URLs, auto-tags from abstract) |
+| `alit init` | Create `.alit/papers.db` |
+| `alit add <title-or-url>` | Add paper (auto-enriches arXiv, auto-tags) |
 | `alit find <query>` | Search arXiv/S2 for papers by topic |
-| `alit import <file> [--bib]` | Bulk-add from URL file or BibTeX (.bib) |
-| `alit read <id>` | Guided reading view with citations |
-| `alit progress` | Visual progress dashboard |
+| `alit import <file>` | Bulk-add from URL file or BibTeX |
 | `alit enrich` | Batch-fetch metadata for papers missing abstracts |
-| `alit show <id>` | Paper details |
-| `alit list [--status X]` | List papers |
-| `alit search <query>` | BM25 search |
-| `alit note <id> <text>` | Append notes |
-| `alit summarize <id> --l4/--l2` | Store summary with provenance |
-| `alit cite <from> <to>` | Add citation edge |
-| `alit status <id> <status>` | Set reading status |
-| `alit tag <id> <tags>` | Set tags |
-| `alit recommend [N]` | Reading recommendations |
+| `alit search <query>` | BM25 full-text search |
+| `alit recommend [N]` | Reading queue ranked by score |
 | `alit ask <question>` | Cross-paper synthesis |
+| `alit read <id>` | Guided reading view |
+| `alit show <id>` | Paper details + citations |
+| `alit list` | List papers (default 20, `--all` for full) |
+| `alit note <id> <text>` | Append notes |
+| `alit summarize <id>` | Store L4/L2 summary with `--model` provenance |
+| `alit cite <from> <to>` | Add citation edge with `--type` |
+| `alit status <id> <s>` | Set status: unread, skimmed, read, synthesized |
+| `alit tag <id> <tags>` | Set comma-separated tags |
+| `alit purpose [text]` | Set or show research purpose |
+| `alit progress` | Visual progress dashboard |
 | `alit stats` | Collection overview |
-| `alit delete <id>` | Remove paper |
-| `alit purpose <text>` | Set research purpose |
-| `alit attach <id> <path>` | Attach local PDF to paper |
-| `alit orphans` | List citations to papers not in collection |
-| `alit fetch-pdf <id>` | Download PDF for existing paper |
-| `alit export [--format X]` | Export as JSON or shareable markdown |
+| `alit orphans` | List citations to missing papers |
+| `alit attach <id> <pdf>` | Attach local PDF |
+| `alit fetch-pdf <id>` | Download PDF from arXiv |
+| `alit delete <id>` | Remove paper + citations |
+| `alit export [--format X]` | Export as JSON or markdown |
 
 All commands support `--json` for machine-readable output.
 
 ## Conventions
 
 - **IDs**: lowercase, no spaces (e.g. `vaswani2017attention`). Auto-generated if omitted.
-- **Status**: unread → skimmed → read → synthesized
-- **Citation types**: cites, extends, contradicts, uses_method, uses_dataset, surveys
-- **Provenance**: always pass `--model` when summarizing — it's tracked
-- **PDFs**: auto-downloaded from arXiv, or attached from local files via `--pdf` or `alit attach`
-- **Orphan citations**: `alit orphans` shows cited papers not in collection — verify and add them
+- **Status progression**: unread → skimmed → read → synthesized.
+- **Citation types**: cites, extends, contradicts, uses_method, uses_dataset, surveys.
+- **Provenance**: always pass `--model` when summarizing.
+- **PDFs**: stored in `.alit/pdfs/`, auto-downloaded for arXiv papers.
