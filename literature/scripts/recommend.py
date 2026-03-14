@@ -27,7 +27,8 @@ def recommend(
         List of paper dicts with added 'score' field, sorted descending.
     """
     papers = conn.execute(
-        "SELECT * FROM papers WHERE status NOT IN ('read', 'synthesized') ORDER BY pagerank DESC"
+        "SELECT id, title, year, status, abstract, tags, pagerank, pdf_path, summary_l4 "
+        "FROM papers WHERE status NOT IN ('read', 'synthesized') ORDER BY pagerank DESC"
     ).fetchall()
 
     max_pr = max((p["pagerank"] or 0.0 for p in papers), default=0.0) or 1.0

@@ -12,7 +12,8 @@ from pathlib import Path
 
 LIT_DIR = ".alit"
 DB_NAME = "papers.db"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+_migrated_dbs: set[str] = set()
 
 
 def _resolve_db_path(path: Path | None = None) -> Path:
@@ -120,6 +121,10 @@ def init_db(path: Path | None = None) -> sqlite3.Connection:
             PRIMARY KEY (from_id, to_id)
         );
 
+        CREATE INDEX IF NOT EXISTS idx_citations_to_id ON citations(to_id);
+        CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(status);
+        CREATE INDEX IF NOT EXISTS idx_papers_arxiv_id ON papers(arxiv_id);
+
         CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY,
             value TEXT
@@ -133,10 +138,15 @@ def init_db(path: Path | None = None) -> sqlite3.Connection:
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Version-aware schema migration. Handles column additions and FTS5 trigger rebuilds."""
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    if db_path in _migrated_dbs:
+        return
+
     cur_version_row = conn.execute("SELECT value FROM meta WHERE key='_schema_version'").fetchone()
     cur_version = int(cur_version_row["value"]) if cur_version_row else 0
 
     if cur_version >= SCHEMA_VERSION:
+        _migrated_dbs.add(db_path)
         return
 
     existing = {r[1] for r in conn.execute("PRAGMA table_info(papers)").fetchall()}
@@ -156,11 +166,18 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 
     _rebuild_fts_triggers(conn)
 
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_citations_to_id ON citations(to_id);
+        CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(status);
+        CREATE INDEX IF NOT EXISTS idx_papers_arxiv_id ON papers(arxiv_id);
+    """)
+
     conn.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('_schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
     conn.commit()
+    _migrated_dbs.add(db_path)
 
 
 def _rebuild_fts_triggers(conn: sqlite3.Connection) -> None:
@@ -638,33 +655,33 @@ def _parse_bibtex(text: str) -> list[dict]:
 
 
 def get_stats(conn: sqlite3.Connection) -> dict:
-    """Collection overview stats."""
-    total = conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+    """Collection overview stats — single query."""
+    row = conn.execute("""
+        SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN pdf_path != '' AND pdf_path IS NOT NULL THEN 1 ELSE 0 END) as with_pdf,
+            SUM(CASE WHEN abstract != '' AND abstract IS NOT NULL THEN 1 ELSE 0 END) as with_abstract,
+            SUM(CASE WHEN summary_l4 != '' AND summary_l4 IS NOT NULL THEN 1 ELSE 0 END) as with_l4,
+            SUM(CASE WHEN summary_l2 != '' AND summary_l2 IS NOT NULL THEN 1 ELSE 0 END) as with_l2
+        FROM papers
+    """).fetchone()
     by_status = {
         r["status"]: r["cnt"]
-        for r in conn.execute(
-            "SELECT status, COUNT(*) as cnt FROM papers GROUP BY status"
-        ).fetchall()
+        for r in conn.execute("SELECT status, COUNT(*) as cnt FROM papers GROUP BY status").fetchall()
     }
     citations = conn.execute("SELECT COUNT(*) FROM citations").fetchone()[0]
     orphans = conn.execute("""
-        SELECT COUNT(*) FROM citations c
-        LEFT JOIN papers p ON c.to_id = p.id WHERE p.id IS NULL
+        SELECT COUNT(*) FROM citations c LEFT JOIN papers p ON c.to_id = p.id WHERE p.id IS NULL
     """).fetchone()[0]
-    with_pdf = conn.execute("SELECT COUNT(*) FROM papers WHERE pdf_path != '' AND pdf_path IS NOT NULL").fetchone()[0]
-    with_l4 = conn.execute("SELECT COUNT(*) FROM papers WHERE summary_l4 != '' AND summary_l4 IS NOT NULL").fetchone()[0]
-    with_l2 = conn.execute("SELECT COUNT(*) FROM papers WHERE summary_l2 != '' AND summary_l2 IS NOT NULL").fetchone()[0]
-    with_abstract = conn.execute("SELECT COUNT(*) FROM papers WHERE abstract != '' AND abstract IS NOT NULL").fetchone()[0]
     purpose_row = conn.execute("SELECT value FROM meta WHERE key='purpose'").fetchone()
-    purpose = purpose_row["value"] if purpose_row else ""
     return {
-        "total": total,
+        "total": row["total"],
         "by_status": by_status,
         "citations": citations,
         "orphan_citations": orphans,
-        "with_pdf": with_pdf,
-        "with_abstract": with_abstract,
-        "with_l4": with_l4,
-        "with_l2": with_l2,
-        "has_purpose": bool(purpose),
+        "with_pdf": row["with_pdf"] or 0,
+        "with_abstract": row["with_abstract"] or 0,
+        "with_l4": row["with_l4"] or 0,
+        "with_l2": row["with_l2"] or 0,
+        "has_purpose": bool(purpose_row and purpose_row["value"]),
     }

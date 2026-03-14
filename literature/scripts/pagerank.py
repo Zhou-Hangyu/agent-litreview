@@ -58,8 +58,6 @@ def compute_pagerank(
 
 
 def update_pagerank(conn: sqlite3.Connection) -> None:
-    """Compute and store PageRank scores in the papers table."""
     scores = compute_pagerank(conn)
-    for paper_id, score in scores.items():
-        conn.execute("UPDATE papers SET pagerank = ? WHERE id = ?", (score, paper_id))
+    conn.executemany("UPDATE papers SET pagerank = ? WHERE id = ?", [(s, pid) for pid, s in scores.items()])
     conn.commit()

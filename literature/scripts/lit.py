@@ -211,9 +211,17 @@ def _cmd_show(args: argparse.Namespace, conn) -> int:
 def _cmd_list(args: argparse.Namespace, conn) -> int:
     status = getattr(args, "status", None)
     tag = getattr(args, "tag", None)
-    papers = list_papers(conn, status=status)
     if tag:
-        papers = [p for p in papers if tag in (p.get("tags") or "")]
+        if status:
+            papers = [dict(r) for r in conn.execute(
+                "SELECT * FROM papers WHERE status = ? AND tags LIKE ? ORDER BY year DESC",
+                (status, f"%{tag}%")).fetchall()]
+        else:
+            papers = [dict(r) for r in conn.execute(
+                "SELECT * FROM papers WHERE tags LIKE ? ORDER BY year DESC",
+                (f"%{tag}%",)).fetchall()]
+    else:
+        papers = list_papers(conn, status=status)
     if getattr(args, "json", False):
         print(json.dumps(papers, ensure_ascii=False))
     else:
@@ -644,42 +652,58 @@ def _cmd_import(args: argparse.Namespace, conn) -> int:
     if is_bib:
         return _import_bibtex(args, conn, file_path)
 
+    from literature.scripts.db import _enrich_batch_arxiv, _enrich_one_s2
+
     db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
     no_pdf = getattr(args, "no_pdf", False)
     lines = [l.strip() for l in file_path.read_text().splitlines()]
     urls = [l.split()[0] for l in lines if l and not l.startswith("#")]
 
-    added, skipped, errors = 0, 0, []
-    for i, url in enumerate(urls):
+    to_import: dict[str, str] = {}
+    skipped = 0
+    errors = []
+    for url in urls:
         arxiv_id = _is_arxiv_url(url)
         if not arxiv_id:
             errors.append(f"{url}: not an arXiv URL, skipping")
             continue
-
         paper_id = f"arxiv_{arxiv_id.replace('.', '_')}"
         if get_paper(conn, paper_id):
             skipped += 1
             continue
+        to_import[arxiv_id] = paper_id
 
-        try:
-            from literature.scripts.db import _enrich_one_arxiv, _enrich_one_s2
-            meta = _enrich_one_arxiv(arxiv_id) or _enrich_one_s2(arxiv_id)
-            title = (meta or {}).get("title", f"arXiv:{arxiv_id}")
-            kwargs = {k: v for k, v in (meta or {}).items() if k != "title"}
-            kwargs["arxiv_id"] = arxiv_id
-            kwargs["url"] = f"https://arxiv.org/abs/{arxiv_id}"
+    if not to_import:
+        print(f"Nothing to import ({skipped} already exist)", flush=True)
+        return 0
 
-            add_paper(conn, paper_id, title, **kwargs)
-            if not no_pdf:
-                fetch_pdf_for_paper(conn, paper_id, db_path)
+    print(f"  Batch-fetching {len(to_import)} papers from arXiv...", flush=True)
+    batch_results = _enrich_batch_arxiv(list(to_import.keys()))
+    time.sleep(3)
 
-            added += 1
-            year = kwargs.get("year", "?")
-            print(f"  [{i+1}/{len(urls)}] {paper_id} ({year})", flush=True)
-        except Exception as e:
-            errors.append(f"{arxiv_id}: {e}")
+    added = 0
+    for arxiv_id, paper_id in to_import.items():
+        meta = batch_results.get(arxiv_id)
+        if meta is None:
+            try:
+                meta = _enrich_one_s2(arxiv_id)
+                time.sleep(1)
+            except Exception as e:
+                errors.append(f"{arxiv_id}: {e}")
+                continue
+        if meta is None:
+            errors.append(f"{arxiv_id}: not found")
+            continue
 
-        time.sleep(3)
+        title = meta.get("title", f"arXiv:{arxiv_id}")
+        kwargs = {k: v for k, v in meta.items() if k != "title" and v}
+        kwargs["arxiv_id"] = arxiv_id
+        kwargs["url"] = f"https://arxiv.org/abs/{arxiv_id}"
+        add_paper(conn, paper_id, title, **kwargs)
+        if not no_pdf:
+            fetch_pdf_for_paper(conn, paper_id, db_path)
+        added += 1
+        print(f"  [{added}/{len(to_import)}] {paper_id} ({kwargs.get('year', '?')})", flush=True)
 
     print(f"\nImported {added}, skipped {skipped} existing, {len(errors)} errors", flush=True)
     for e in errors:
