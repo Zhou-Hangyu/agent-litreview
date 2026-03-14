@@ -6,6 +6,7 @@ Zero dependencies. Pure Python stdlib only.
 
 import re
 import sqlite3
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -106,10 +107,101 @@ def _clean_arxiv_id(raw: str) -> str:
     return re.sub(r"^(https?://)?arxiv\.org/(abs|pdf)/", "", raw).rstrip(".pdf").strip("/")
 
 
-def enrich_from_arxiv(conn: sqlite3.Connection, db_path: Path, *, fetch_pdfs: bool = True) -> dict:
-    """Batch-fetch metadata from arXiv API for papers with arxiv_id but missing abstracts."""
+def _fetch_url(url: str, *, timeout: int = 30, max_retries: int = 3) -> bytes:
+    """Fetch URL with retry + exponential backoff on 429/5xx."""
     import time
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "alit/0.2"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503) and attempt < max_retries - 1:
+                wait = 5 * (2 ** attempt)
+                print(f"    rate limited ({e.code}), waiting {wait}s...", flush=True)
+                time.sleep(wait)
+                continue
+            raise
+        except Exception:
+            if attempt < max_retries - 1:
+                import time as _t
+                _t.sleep(3 * (attempt + 1))
+                continue
+            raise
+    return b""
+
+
+def _enrich_one_arxiv(arxiv_id: str) -> dict | None:
+    """Fetch metadata for one paper from arXiv API. Returns parsed dict or None."""
     import xml.etree.ElementTree as ET
+    clean_id = _clean_arxiv_id(arxiv_id)
+    url = f"https://export.arxiv.org/api/query?id_list={clean_id}&max_results=1"
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+    xml_data = _fetch_url(url).decode("utf-8")
+    root = ET.fromstring(xml_data)
+    entry = root.find("atom:entry", ns)
+    if entry is None:
+        return None
+
+    title_el = entry.find("atom:title", ns)
+    title = " ".join(title_el.text.strip().split()) if title_el is not None and title_el.text else ""
+    if "Error" in title:
+        return None
+
+    summary_el = entry.find("atom:summary", ns)
+    abstract = " ".join(summary_el.text.strip().split()) if summary_el is not None and summary_el.text else ""
+    pub_el = entry.find("atom:published", ns)
+    year = int(pub_el.text[:4]) if pub_el is not None and pub_el.text else None
+    authors = [
+        a.find("atom:name", ns).text
+        for a in entry.findall("atom:author", ns)
+        if a.find("atom:name", ns) is not None and a.find("atom:name", ns).text
+    ]
+    entry_url_el = entry.find("atom:id", ns)
+    entry_url = entry_url_el.text if entry_url_el is not None else ""
+
+    result: dict = {"authors": ", ".join(authors), "abstract": abstract, "url": entry_url}
+    if title:
+        result["title"] = title
+    if year:
+        result["year"] = year
+    return result
+
+
+def _enrich_one_s2(arxiv_id: str) -> dict | None:
+    """Fetch metadata for one paper from Semantic Scholar API (no API key needed)."""
+    import json as _json
+    clean_id = _clean_arxiv_id(arxiv_id)
+    url = f"https://api.semanticscholar.org/graph/v1/paper/ArXiv:{clean_id}?fields=title,abstract,year,authors,externalIds,url"
+
+    try:
+        data = _json.loads(_fetch_url(url).decode("utf-8"))
+    except Exception:
+        return None
+
+    if "error" in data or not data.get("title"):
+        return None
+
+    authors = ", ".join(a.get("name", "") for a in (data.get("authors") or []))
+    result: dict = {
+        "authors": authors,
+        "abstract": data.get("abstract") or "",
+        "url": data.get("url") or "",
+    }
+    if data.get("title"):
+        result["title"] = data["title"]
+    if data.get("year"):
+        result["year"] = data["year"]
+    ext = data.get("externalIds") or {}
+    if ext.get("DOI"):
+        result["doi"] = ext["DOI"]
+    return result
+
+
+def enrich_papers(conn: sqlite3.Connection, db_path: Path, *, fetch_pdfs: bool = True) -> dict:
+    """Batch-fetch metadata for papers missing abstracts. Tries arXiv first, falls back to S2."""
+    import time
 
     papers = conn.execute(
         "SELECT id, arxiv_id FROM papers WHERE arxiv_id != '' AND (abstract = '' OR abstract IS NULL)"
@@ -117,67 +209,35 @@ def enrich_from_arxiv(conn: sqlite3.Connection, db_path: Path, *, fetch_pdfs: bo
     if not papers:
         return {"enriched": 0, "total": 0, "errors": []}
 
-    arxiv_map = {r["arxiv_id"]: r["id"] for r in papers}
-    ns = {"atom": "http://www.w3.org/2005/Atom"}
     enriched = 0
     errors = []
 
-    for i, (arxiv_id, paper_id) in enumerate(arxiv_map.items()):
-        clean_id = _clean_arxiv_id(arxiv_id)
-        url = f"https://export.arxiv.org/api/query?id_list={clean_id}&max_results=1"
+    for i, row in enumerate(papers):
+        arxiv_id, paper_id = row["arxiv_id"], row["id"]
+        source = "arxiv"
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "alit/0.2"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                xml_data = resp.read().decode("utf-8")
-
-            root = ET.fromstring(xml_data)
-            entry = root.find("atom:entry", ns)
-            if entry is None:
-                errors.append(f"{arxiv_id}: no entry in response")
+            result = _enrich_one_arxiv(arxiv_id)
+            if result is None:
+                source = "s2"
+                result = _enrich_one_s2(arxiv_id)
+            if result is None:
+                errors.append(f"{arxiv_id}: not found on arXiv or S2")
                 time.sleep(3)
                 continue
 
-            title_el = entry.find("atom:title", ns)
-            title = " ".join(title_el.text.strip().split()) if title_el is not None and title_el.text else ""
-            if "Error" in title:
-                errors.append(f"{arxiv_id}: {title}")
-                time.sleep(3)
-                continue
-
-            summary_el = entry.find("atom:summary", ns)
-            abstract = " ".join(summary_el.text.strip().split()) if summary_el is not None and summary_el.text else ""
-
-            pub_el = entry.find("atom:published", ns)
-            year = int(pub_el.text[:4]) if pub_el is not None and pub_el.text else None
-
-            authors = [
-                a.find("atom:name", ns).text
-                for a in entry.findall("atom:author", ns)
-                if a.find("atom:name", ns) is not None and a.find("atom:name", ns).text
-            ]
-
-            entry_url_el = entry.find("atom:id", ns)
-            entry_url = entry_url_el.text if entry_url_el is not None else ""
-
-            kwargs: dict = {"authors": ", ".join(authors), "abstract": abstract, "url": entry_url}
-            if title:
-                kwargs["title"] = title
-            if year:
-                kwargs["year"] = year
-
-            update_paper(conn, paper_id, **kwargs)
+            update_paper(conn, paper_id, **result)
 
             if fetch_pdfs:
                 fetch_pdf_for_paper(conn, paper_id, db_path)
 
             enriched += 1
-            print(f"  [{i + 1}/{len(arxiv_map)}] {paper_id} ({year or '?'})", flush=True)
+            print(f"  [{i + 1}/{len(papers)}] {paper_id} ({result.get('year', '?')}) via {source}", flush=True)
         except Exception as e:
             errors.append(f"{arxiv_id} ({paper_id}): {e}")
 
         time.sleep(3)
 
-    return {"enriched": enriched, "total": len(arxiv_map), "errors": errors}
+    return {"enriched": enriched, "total": len(papers), "errors": errors}
 
 
 def _arxiv_pdf_url(arxiv_id: str) -> str:

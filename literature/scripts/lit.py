@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 from literature.scripts.db import DB_NAME, add_citation, add_paper, attach_pdf
-from literature.scripts.db import delete_paper, enrich_from_arxiv
+from literature.scripts.db import delete_paper, enrich_papers
 from literature.scripts.db import fetch_pdf_for_paper, get_db
 from literature.scripts.db import get_orphan_citations, get_paper, get_stats
 from literature.scripts.db import init_db, list_papers, update_paper
@@ -378,7 +378,7 @@ def _cmd_orphans(args: argparse.Namespace, conn) -> int:
 def _cmd_enrich(args: argparse.Namespace, conn) -> int:
     db_path = Path(args._db_path) if hasattr(args, "_db_path") else Path.cwd()
     no_pdf = getattr(args, "no_pdf", False)
-    result = enrich_from_arxiv(conn, db_path, fetch_pdfs=not no_pdf)
+    result = enrich_papers(conn, db_path, fetch_pdfs=not no_pdf)
     print(f"\nEnriched {result['enriched']}/{result['total']} papers from arXiv", flush=True)
     if result["errors"]:
         print("Issues:")
