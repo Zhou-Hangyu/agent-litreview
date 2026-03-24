@@ -552,7 +552,31 @@ def _cmd_export(args: argparse.Namespace, conn) -> int:
         print("\n".join(lines))
         return 0
 
-    print(f"Unknown format: {fmt}. Use --format json or --format markdown", file=sys.stderr)
+    if fmt == "bib":
+        papers = [dict(r) for r in conn.execute("SELECT * FROM papers ORDER BY year DESC").fetchall()]
+        entries = []
+        for p in papers:
+            key = p.get("arxiv_id") or p.get("doi") or p["id"]
+            key = key.replace("/", "_").replace(":", "_").replace(" ", "_")
+            lines = [f"@article{{{key},"]
+            lines.append(f"  title = {{{p['title']}}},")
+            if p.get("authors"):
+                lines.append(f"  author = {{{p['authors']}}},")
+            if p.get("year"):
+                lines.append(f"  year = {{{p['year']}}},")
+            if p.get("doi"):
+                lines.append(f"  doi = {{{p['doi']}}},")
+            if p.get("url"):
+                lines.append(f"  url = {{{p['url']}}},")
+            if p.get("arxiv_id"):
+                lines.append(f"  eprint = {{{p['arxiv_id']}}},")
+                lines.append("  archiveprefix = {arXiv},")
+            lines.append("}")
+            entries.append("\n".join(lines))
+        print("\n\n".join(entries))
+        return 0
+
+    print(f"Unknown format: {fmt}. Use --format json, --format markdown, or --format bib", file=sys.stderr)
     return 1
 
 
@@ -1117,10 +1141,18 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
     if not skill_src.exists():
         print(f"Error: SKILL.md not found at {skill_src}", file=sys.stderr)
         return 1
-    targets = [
-        Path.home() / ".claude" / "skills" / "alit",
-        Path.home() / ".agents" / "skills" / "alit",
-    ]
+
+    use_global = getattr(args, "global_install", False)
+    if use_global:
+        targets = [
+            Path.home() / ".claude" / "skills" / "alit",
+            Path.home() / ".agents" / "skills" / "alit",
+        ]
+    else:
+        targets = [
+            Path.cwd() / ".claude" / "skills" / "alit",
+        ]
+
     for dest in targets:
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_src, dest / "SKILL.md")
@@ -1148,6 +1180,7 @@ def _check_skill_version() -> None:
         return
 
     targets = [
+        Path.cwd() / ".claude" / "skills" / "alit",
         Path.home() / ".claude" / "skills" / "alit",
         Path.home() / ".agents" / "skills" / "alit",
     ]
@@ -1314,7 +1347,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # export (updated to support --format)
     p = sub.add_parser("export", help="Export collection as JSON or markdown")
-    p.add_argument("--format", choices=["json", "markdown"], default="json", dest="format",
+    p.add_argument("--format", choices=["json", "markdown", "bib"], default="json", dest="format",
                    help="Output format (default: json)")
 
     # find
@@ -1336,7 +1369,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--merge", action="store_true", help="Auto-merge duplicates (keeps richest record)")
 
     # install-skill
-    sub.add_parser("install-skill", help="Install SKILL.md for agent integration")
+    p = sub.add_parser("install-skill", help="Install SKILL.md for agent integration")
+    p.add_argument("--global", action="store_true", dest="global_install",
+                   help="Install globally (~/.claude/skills/) instead of project-local (.claude/skills/)")
 
     return parser
 
