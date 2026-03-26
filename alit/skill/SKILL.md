@@ -1,6 +1,6 @@
 ---
 name: alit
-version: "0.6.0"
+version: "0.6.1"
 description: "Persistent knowledge base for literature review. Use when the user wants to review academic papers, find what to read next, build on prior reading sessions, or answer research questions from collected papers. Handles arXiv URLs, BibTeX import, citation graphs, and reading recommendations. Do not use for non-academic documents, note-taking, or reference formatting."
 ---
 
@@ -31,15 +31,23 @@ Follow this order. Do not skip steps or mix phases.
 
 ### Phase 2: Read papers
 
-1. Run `alit recommend 5` to pick what to read next. Output includes taste context and abstracts — use your judgment to rerank if needed.
-2. Run `alit read <id>` to see the paper's abstract, citations, and existing summaries.
-3. Read the PDF at `.alit/pdfs/<filename>.pdf` if available.
-4. After reading, store findings in this order:
+**PDF required.** Only read and summarize papers that have a downloaded PDF. Summaries must come from reading the full paper — never from the abstract alone.
+
+1. Run `alit recommend 5` to pick what to read next. Papers with PDFs are marked 📄.
+2. **Pick a paper that has a PDF.** If the top recommendation has no PDF, either run `alit fetch-pdf <id>` or skip to the next paper that does.
+3. Run `alit read <id>` to see the paper's details. Confirm a PDF path is shown.
+4. Read the full PDF at `.alit/pdfs/<filename>.pdf`. Base all notes and summaries on the full paper content.
+5. After reading the full paper, store findings in this order:
    - `alit status <id> read`
    - `alit note <id> "key observations..."`
    - `alit summarize <id> --l4 "one sentence summary" --model "<model-name>"`
    - `alit summarize <id> --l2 '["claim 1", "claim 2"]' --model "<model-name>"`
-5. Always pass `--model` when summarizing.
+6. Always pass `--model` when summarizing.
+
+**Do not:**
+- Mark a paper as `read` or `skimmed` based only on its abstract.
+- Write L4/L2 summaries without reading the full PDF.
+- Bulk-summarize papers that lack PDFs. Fetch PDFs first or skip them.
 
 ### Phase 3: Verify citations
 

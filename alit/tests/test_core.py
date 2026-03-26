@@ -713,7 +713,7 @@ def test_summarize_variadic_l2(tmp_path):
 
     output = io.StringIO()
     with patch("sys.stdout", output):
-        code = run(["summarize", "p1", "--l2", "claim1", "claim2", "claim3"], root=tmp_path)
+        code = run(["summarize", "p1", "--l2", "claim1", "claim2", "claim3", "--force"], root=tmp_path)
     assert code == 0
     assert "l2" in output.getvalue()
 
@@ -723,6 +723,63 @@ def test_summarize_variadic_l2(tmp_path):
     claims = json.loads(paper["summary_l2"])
     assert claims == ["claim1", "claim2", "claim3"]
     conn.close()
+
+
+def test_summarize_blocked_without_pdf(tmp_path):
+    """Summarize should fail when paper has no PDF (unless --force)."""
+    import io
+    from unittest.mock import patch
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Test Paper")
+    conn.close()
+
+    err = io.StringIO()
+    with patch("sys.stderr", err):
+        code = run(["summarize", "p1", "--l4", "summary text"], root=tmp_path)
+    assert code == 1
+    assert "No PDF" in err.getvalue()
+
+
+def test_summarize_allowed_with_pdf(tmp_path):
+    """Summarize should succeed when paper has a PDF."""
+    import io
+    from unittest.mock import patch
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Test Paper")
+    update_paper(conn, "p1", pdf_path="pdfs/test.pdf")
+    conn.close()
+
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["summarize", "p1", "--l4", "summary text", "--model", "test"], root=tmp_path)
+    assert code == 0
+
+
+def test_status_blocked_without_pdf(tmp_path):
+    """Status change to read/skimmed should fail without PDF (unless --force)."""
+    import io
+    from unittest.mock import patch
+    from alit.scripts.lit import run
+
+    conn = init_db(tmp_path)
+    add_paper(conn, "p1", "Test Paper")
+    conn.close()
+
+    err = io.StringIO()
+    with patch("sys.stderr", err):
+        code = run(["status", "p1", "read"], root=tmp_path)
+    assert code == 1
+    assert "No PDF" in err.getvalue()
+
+    # --force should override
+    output = io.StringIO()
+    with patch("sys.stdout", output):
+        code = run(["status", "p1", "read", "--force"], root=tmp_path)
+    assert code == 0
 
 
 def test_summarize_l2_backward_compat_json(tmp_path):
@@ -736,7 +793,7 @@ def test_summarize_l2_backward_compat_json(tmp_path):
 
     output = io.StringIO()
     with patch("sys.stdout", output):
-        code = run(["summarize", "p1", "--l2", '["old_claim1", "old_claim2"]'], root=tmp_path)
+        code = run(["summarize", "p1", "--l2", '["old_claim1", "old_claim2"]', "--force"], root=tmp_path)
     assert code == 0
 
     conn = init_db(tmp_path)

@@ -307,6 +307,14 @@ def _cmd_summarize(args: argparse.Namespace, conn) -> int:
         print(f"Paper not found: {args.id}", file=sys.stderr)
         return 1
 
+    if not paper.get("pdf_path"):
+        force = getattr(args, "force", False)
+        if not force:
+            print(f"⚠ No PDF for {args.id}. Summaries should be based on full paper reading, not abstracts.", file=sys.stderr)
+            print(f"  Fetch the PDF first:  alit fetch-pdf {args.id}", file=sys.stderr)
+            print(f"  Or override with:     alit summarize {args.id} --force ...", file=sys.stderr)
+            return 1
+
     model = getattr(args, "model", "") or ""
     l4 = getattr(args, "l4", None)
     l2_raw = getattr(args, "l2", None)
@@ -383,6 +391,13 @@ def _cmd_status(args: argparse.Namespace, conn) -> int:
     if paper is None:
         print(f"Paper not found: {args.id}", file=sys.stderr)
         return 1
+    if args.new_status in ("read", "skimmed", "synthesized") and not paper.get("pdf_path"):
+        force = getattr(args, "force", False)
+        if not force:
+            print(f"⚠ No PDF for {args.id}. Cannot mark as '{args.new_status}' without reading the full paper.", file=sys.stderr)
+            print(f"  Fetch the PDF first:  alit fetch-pdf {args.id}", file=sys.stderr)
+            print(f"  Or override with:     alit status {args.id} {args.new_status} --force", file=sys.stderr)
+            return 1
     update_paper(conn, args.id, status=args.new_status)
     print(f"(-o+) Status updated: {args.id} → {args.new_status}")
     return 0
@@ -1195,6 +1210,8 @@ def _cmd_read(args: argparse.Namespace, conn) -> int:
     pdf = paper.get("pdf_path", "")
     if pdf:
         print(f"  PDF: .alit/{pdf}")
+    else:
+        print(f"  PDF: ✗ NOT AVAILABLE — fetch before reading: alit fetch-pdf {paper['id']}")
     print(f"{'='*70}")
 
     if paper.get("abstract"):
@@ -1458,6 +1475,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--l4", default=None, help="One-line summary (L4)")
     p.add_argument("--l2", nargs="*", default=None, help="Key claims (space-separated strings, or single JSON array for backward compat)")
     p.add_argument("--model", default="", help="Model name for provenance")
+    p.add_argument("--force", action="store_true", help="Allow summarizing without PDF")
 
     # cite
     p = sub.add_parser("cite", help="Add citation edge")
@@ -1471,6 +1489,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status", help="Set reading status")
     p.add_argument("id", help="Paper ID")
     p.add_argument("new_status", help="New status (unread/skimmed/read/synthesized)")
+    p.add_argument("--force", action="store_true", help="Allow status change without PDF")
 
     # auto-cite
     sub.add_parser("auto-cite", help="Extract citations from PDFs and build citation graph")
